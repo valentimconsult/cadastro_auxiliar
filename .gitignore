@@ -1,0 +1,59 @@
+# Banco de dados SQLite
+data/data.db
+data/*.db
+*.db
+
+# Logs
+logs/
+*.log
+
+# Configurações locais
+config/local_*
+.env
+
+# Arquivos temporários
+*.tmp
+*.temp
+__pycache__/
+*.pyc
+*.pyo
+
+# Arquivos de upload
+uploads/
+data/uploads/
+
+# Arquivos de backup
+*.backup
+*.bak
+backup/
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.dockerignore
+
+# Python
+venv/
+env/
+.venv/
+.env/
+
+# Arquivos de teste
+test_*
+*_test.py
+
+# Arquivos de sincronização
+data_local.db
+sync_*.db
+
+# Arquivos de otimização
+*_resized.*
+optimized_* 

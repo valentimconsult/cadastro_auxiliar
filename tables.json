@@ -1,0 +1,38 @@
+[
+  {
+    "name": "meta_produto",
+    "display_name": "meta_produto",
+    "fields": [
+      {
+        "name": "modeloref",
+        "type": "text"
+      },
+      {
+        "name": "modelo",
+        "type": "text"
+      },
+      {
+        "name": "codfamilia",
+        "type": "int"
+      },
+      {
+        "name": "descricaofamilia",
+        "type": "text"
+      },
+      {
+        "name": "marca",
+        "type": "text"
+      },
+      {
+        "name": "meta",
+        "type": "int"
+      },
+      {
+        "name": "periodo",
+        "type": "date"
+      }
+    ],
+    "created_by": "admin",
+    "created_at": "2025-08-01T18:51:15.627584"
+  }
+]
