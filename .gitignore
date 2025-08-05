@@ -26,6 +26,7 @@ data/uploads/
 *.backup
 *.bak
 backup/
+backup_before_git/
 
 # Arquivos de sistema
 .DS_Store

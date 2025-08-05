@@ -53,24 +53,6 @@ services:
       retries: 3
       start_period: 40s
 
-  # Servico opcional para nginx como proxy reverso (descomente se necessario)
-  # nginx:
-  #   image: nginx:alpine
-  #   container_name: cadastro-nginx
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
-  #   depends_on:
-  #     - cadastro-app
-  #   restart: unless-stopped
-  #   networks:
-  #     - cadastro-network
-
 networks:
   cadastro-network:
-    driver: bridge
-
-volumes:
-  cadastro-data:
-    driver: local 
+    driver: bridge 
