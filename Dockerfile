@@ -1,20 +1,39 @@
-FROM python:3.11-slim
+# Dockerfile otimizado para multiplataforma (x86_64 e ARM64)
+# Compativel com: Ubuntu 24, Raspberry Pi 5, Docker Compose v2+
 
-# Reduce the Python image size and ensure logs are unbuffered
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Usar imagem base multiplataforma
+FROM --platform=$BUILDPLATFORM python:3.11-slim
 
-# Install system dependencies and Python packages
-RUN pip install --upgrade pip
+# Metadados da imagem
+LABEL maintainer="Cadastro Streamlit App"
+LABEL description="Aplicacao de cadastro com Streamlit e Flask API"
+LABEL version="1.0"
 
-# Copy dependency list first to leverage Docker cache
+# Configuracoes de ambiente para otimizacao
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Instalar dependencias do sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Atualizar pip e instalar dependencias Python
+RUN pip install --upgrade pip setuptools wheel
+
+# Copiar arquivo de dependencias primeiro para aproveitar cache do Docker
 COPY requirements.txt /app/requirements.txt
+
+# Instalar dependencias Python
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Create application directory
+# Criar diretorio da aplicacao
 WORKDIR /app
 
-# Copy application files
+# Copiar arquivos da aplicacao
 COPY streamlit_app.py /app/
 COPY api_server.py /app/
 COPY users.json /app/
@@ -22,8 +41,14 @@ COPY tables.json /app/
 COPY config.json /app/
 COPY data /app/data
 
-# Expose the default Streamlit port
+# Criar diretorios necessarios
+RUN mkdir -p /app/logs /app/config
+
+# Definir permissoes adequadas
+RUN chmod -R 755 /app
+
+# Expor porta padrao do Streamlit
 EXPOSE 8501
 
-# Run the Streamlit application
+# Comando padrao para executar a aplicacao Streamlit
 CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]
