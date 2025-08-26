@@ -1,12 +1,12 @@
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-import sqlite3
 import json
 import os
 import pandas as pd
 from datetime import datetime
 import io
 import base64
+from db_config import get_db_cursor
 
 app = Flask(__name__)
 CORS(app)  # Permitir CORS para acesso externo
@@ -18,10 +18,9 @@ USERS_FILE = "users.json"
 TABLES_FILE = "tables.json"
 
 def get_db_connection():
-    """Retorna conexao com o banco SQLite."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row  # Permite acesso por nome de coluna
-    return conn
+    """Retorna conexao com o banco PostgreSQL."""
+    from db_config import get_db_connection as pg_get_connection
+    return pg_get_connection()
 
 def load_tables_metadata():
     """Carrega metadados das tabelas."""
@@ -56,10 +55,9 @@ def get_tables():
         tables_info = []
         
         for table in metadata:
-            conn = get_db_connection()
-            cursor = conn.execute(f"SELECT COUNT(*) as count FROM {table['name']}")
-            row_count = cursor.fetchone()['count']
-            conn.close()
+            with get_db_cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) as count FROM {table['name']}")
+                row_count = cursor.fetchone()['count']
             
             tables_info.append({
                 "name": table['name'],
@@ -100,38 +98,43 @@ def get_table_data(table_name):
         
         if search:
             # Busca em todas as colunas de texto
-            cursor = conn.execute(f"PRAGMA table_info({table_name})")
-            columns = cursor.fetchall()
-            text_columns = [col['name'] for col in columns if col['type'].upper() == 'TEXT']
-            
-            if text_columns:
-                search_conditions = [f"{col} LIKE ?" for col in text_columns]
-                where_clause = f"WHERE {' OR '.join(search_conditions)}"
-                params = [f"%{search}%" for _ in text_columns]
+            with get_db_cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = %s AND data_type IN ('character varying', 'text', 'character')
+                """, (table_name,))
+                columns = cursor.fetchall()
+                text_columns = [col['column_name'] for col in columns]
+                
+                if text_columns:
+                    search_conditions = [f"{col} ILIKE %s" for col in text_columns]
+                    where_clause = f"WHERE {' OR '.join(search_conditions)}"
+                    params = [f"%{search}%" for _ in text_columns]
         
         # Query para contar total de registros
         count_query = f"SELECT COUNT(*) as total FROM {table_name} {where_clause}"
-        cursor = conn.execute(count_query, params)
-        total_count = cursor.fetchone()['total']
+        with get_db_cursor() as cursor:
+            cursor.execute(count_query, params)
+            total_count = cursor.fetchone()['total']
         
         # Query para dados paginados
         data_query = f"""
             SELECT * FROM {table_name} 
             {where_clause}
             ORDER BY {sort_by} {sort_order}
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
         """
         params.extend([limit, offset])
         
-        cursor = conn.execute(data_query, params)
-        rows = cursor.fetchall()
+        with get_db_cursor() as cursor:
+            cursor.execute(data_query, params)
+            rows = cursor.fetchall()
         
         # Converter para dicionarios
         data = []
         for row in rows:
             data.append(dict(row))
-        
-        conn.close()
         
         return jsonify({
             "success": True,
@@ -155,9 +158,10 @@ def export_table(table_name):
     try:
         format_type = request.args.get('format', 'csv').lower()
         
-        conn = get_db_connection()
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_name}")
+            rows = cursor.fetchall()
+            df = pd.DataFrame(rows)
         
         if format_type == 'csv':
             output = io.StringIO()
@@ -198,19 +202,23 @@ def export_table(table_name):
 def get_table_schema(table_name):
     """Obtem o schema de uma tabela."""
     try:
-        conn = get_db_connection()
-        cursor = conn.execute(f"PRAGMA table_info({table_name})")
-        columns = cursor.fetchall()
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns 
+                WHERE table_name = %s
+                ORDER BY ordinal_position
+            """, (table_name,))
+            columns = cursor.fetchall()
         
         schema = []
         for col in columns:
             schema.append({
-                "name": col['name'],
-                "type": col['type'],
-                "not_null": bool(col['notnull']),
-                "primary_key": bool(col['pk']),
-                "default_value": col['dflt_value']
+                "name": col['column_name'],
+                "type": col['data_type'],
+                "not_null": col['is_nullable'] == 'NO',
+                "primary_key": False,  # PostgreSQL nao fornece isso diretamente
+                "default_value": col['column_default']
             })
         
         return jsonify({
@@ -228,11 +236,14 @@ def get_table_schema(table_name):
 def get_database_stats():
     """Obtem estatisticas do banco de dados."""
     try:
-        conn = get_db_connection()
-        
         # Listar todas as tabelas
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [row['name'] for row in cursor.fetchall()]
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """)
+            tables = [row['table_name'] for row in cursor.fetchall()]
         
         stats = {
             "total_tables": len(tables),
@@ -240,20 +251,22 @@ def get_database_stats():
         }
         
         for table in tables:
-            cursor = conn.execute(f"SELECT COUNT(*) as count FROM {table}")
-            row_count = cursor.fetchone()['count']
-            
-            cursor = conn.execute(f"PRAGMA table_info({table})")
-            columns = cursor.fetchall()
-            column_count = len(columns)
-            
-            stats["tables"].append({
-                "name": table,
-                "row_count": row_count,
-                "column_count": column_count
-            })
-        
-        conn.close()
+            with get_db_cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) as count FROM {table}")
+                row_count = cursor.fetchone()['count']
+                
+                cursor.execute(f"""
+                    SELECT COUNT(*) as column_count
+                    FROM information_schema.columns 
+                    WHERE table_name = %s AND table_schema = 'public'
+                """, (table,))
+                column_count = cursor.fetchone()['column_count']
+                
+                stats["tables"].append({
+                    "name": table,
+                    "row_count": row_count,
+                    "column_count": column_count
+                })
         
         return jsonify({
             "success": True,
@@ -276,21 +289,18 @@ def update_record(table_name, record_id):
                 "error": "Dados nao fornecidos"
             }), 400
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         # Construir query de UPDATE
-        set_clause = ", ".join([f"{key} = ?" for key in data.keys()])
-        query = f"UPDATE {table_name} SET {set_clause} WHERE id = ?"
+        set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
+        query = f"UPDATE {table_name} SET {set_clause} WHERE id = %s"
         
         # Preparar valores
         update_values = list(data.values())
         update_values.append(record_id)
         
-        cursor.execute(query, update_values)
-        conn.commit()
-        
-        if cursor.rowcount > 0:
+        with get_db_cursor() as cursor:
+            cursor.execute(query, update_values)
+            
+            if cursor.rowcount > 0:
             return jsonify({
                 "success": True,
                 "message": "Registro atualizado com sucesso",
@@ -327,32 +337,29 @@ def delete_record(table_name, record_id):
             }), 404
         
         # Excluir registro
-        cursor.execute(f"DELETE FROM {table_name} WHERE id = ?", (record_id,))
-        conn.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": "Registro excluido com sucesso",
-            "affected_rows": cursor.rowcount
-        })
+        with get_db_cursor() as cursor:
+            cursor.execute(f"DELETE FROM {table_name} WHERE id = %s", (record_id,))
+            
+            return jsonify({
+                "success": True,
+                "message": "Registro excluido com sucesso",
+                "affected_rows": cursor.rowcount
+            })
         
     except Exception as e:
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
-    finally:
-        conn.close()
 
 
 @app.route('/api/tables/<table_name>/records/<int:record_id>', methods=['GET'])
 def get_record(table_name, record_id):
     """Obtem um registro especifico por ID."""
     try:
-        conn = get_db_connection()
-        cursor = conn.execute(f"SELECT * FROM {table_name} WHERE id = ?", (record_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_name} WHERE id = %s", (record_id,))
+            row = cursor.fetchone()
         
         if row:
             return jsonify({
@@ -386,10 +393,9 @@ def execute_custom_query():
                 "error": "Apenas queries SELECT sao permitidas por seguranca"
             }), 400
         
-        conn = get_db_connection()
-        cursor = conn.execute(query)
-        rows = cursor.fetchall()
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute(query)
+            rows = cursor.fetchall()
         
         # Converter para dicionarios
         data = []
@@ -412,7 +418,7 @@ if __name__ == '__main__':
     os.makedirs(DATA_DIR, exist_ok=True)
     
     print("🚀 API Server iniciando...")
-    print(f"📊 Banco de dados: {DB_PATH}")
+    print("📊 Banco de dados: PostgreSQL")
     print("🌐 Endpoints disponiveis:")
     print("   GET  /api/health - Status do servidor")
     print("   GET  /api/tables - Lista todas as tabelas")

@@ -1,13 +1,13 @@
 import streamlit as st
 import os
 import json
-import sqlite3
 import hashlib
 import pandas as pd
 from datetime import datetime
 import io
 import base64
 from PIL import Image
+from db_config import get_db_connection, get_db_cursor
 
 
 # Paths for configuration and data.  The app writes all of its state into
@@ -105,11 +105,10 @@ def resize_logo_if_needed(logo_path: str, max_width: int = 300, max_height: int 
         return logo_path
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """Return a connection to the SQLite database."""
-    db_path = os.path.join(DATA_DIR, "data.db")
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    return conn
+def get_db_connection():
+    """Return a connection to the PostgreSQL database."""
+    from db_config import get_db_connection as pg_get_connection
+    return pg_get_connection()
 
 
 def sanitize_identifier(name: str) -> str:
@@ -134,30 +133,28 @@ def sanitize_identifier(name: str) -> str:
 
 
 def create_sql_table(table_name: str, fields: list) -> None:
-    """Create a new table in the SQLite database with the given fields.
+    """Create a new table in the PostgreSQL database with the given fields.
 
     Each field in the list should be a dict with keys 'name' and 'type'
     where 'type' is one of 'text', 'int', 'float', 'date' or 'bool'.  A
     primary key column named "id" with auto incrementing integers is always
     added automatically.
     """
-    conn = get_db_connection()
-    columns = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
-    type_map = {
-        "text": "TEXT",
-        "int": "INTEGER",
-        "float": "REAL",
-        "date": "TEXT",
-        "bool": "INTEGER",
-    }
-    for field in fields:
-        col_name = sanitize_identifier(field['name'])
-        sql_type = type_map.get(field['type'], "TEXT")
-        columns.append(f"{col_name} {sql_type}")
-    sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(columns)});"
-    conn.execute(sql)
-    conn.commit()
-    conn.close()
+    with get_db_cursor() as cursor:
+        columns = ["id SERIAL PRIMARY KEY"]
+        type_map = {
+            "text": "TEXT",
+            "int": "INTEGER",
+            "float": "REAL",
+            "date": "DATE",
+            "bool": "BOOLEAN",
+        }
+        for field in fields:
+            col_name = sanitize_identifier(field['name'])
+            sql_type = type_map.get(field['type'], "TEXT")
+            columns.append(f"{col_name} {sql_type}")
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(columns)});"
+        cursor.execute(sql)
 
 
 def insert_record(table_name: str, fields: list, values: dict) -> None:
@@ -167,21 +164,19 @@ def insert_record(table_name: str, fields: list, values: dict) -> None:
     a dictionary mapping the field names (not SQL names) to values entered
     by the user.
     """
-    conn = get_db_connection()
-    # Build column and placeholder lists skipping the id column.
-    column_names = []
-    placeholders = []
-    value_list = []
-    for field in fields:
-        fname = field['name']
-        sql_name = sanitize_identifier(fname)
-        column_names.append(sql_name)
-        placeholders.append("?")
-        value_list.append(values.get(fname))
-    sql = f"INSERT INTO {table_name} ({', '.join(column_names)}) VALUES ({', '.join(placeholders)})"
-    conn.execute(sql, value_list)
-    conn.commit()
-    conn.close()
+    with get_db_cursor() as cursor:
+        # Build column and placeholder lists skipping the id column.
+        column_names = []
+        placeholders = []
+        value_list = []
+        for field in fields:
+            fname = field['name']
+            sql_name = sanitize_identifier(fname)
+            column_names.append(sql_name)
+            placeholders.append("%s")
+            value_list.append(values.get(fname))
+        sql = f"INSERT INTO {table_name} ({', '.join(column_names)}) VALUES ({', '.join(placeholders)})"
+        cursor.execute(sql, value_list)
 
 
 def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
@@ -197,10 +192,11 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
     # Get existing records for duplicate checking
     existing_records = set()
     try:
-        cursor = conn.execute(f"SELECT * FROM {table_name}")
-        for row in cursor.fetchall():
-            # Create a tuple of values (excluding id) for comparison
-            existing_records.add(tuple(row[1:]))  # Skip id column
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_name}")
+            for row in cursor.fetchall():
+                # Create a tuple of values (excluding id) for comparison
+                existing_records.add(tuple(row[1:]))  # Skip id column
     except Exception as e:
         errors.append(f"Erro ao verificar registros existentes: {e}")
         return 0, 0, errors
@@ -213,7 +209,7 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
         column_names.append(sql_name)
     
     # Prepare SQL statement
-    placeholders = ["?"] * len(column_names)
+    placeholders = ["%s"] * len(column_names)
     sql = f"INSERT INTO {table_name} ({', '.join(column_names)}) VALUES ({', '.join(placeholders)})"
     
     for i, record in enumerate(records):
@@ -230,7 +226,7 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
                 elif field['type'] == 'float':
                     value = float(value) if value else None
                 elif field['type'] == 'bool':
-                    value = 1 if value in ['True', 'true', '1', 1] else 0
+                    value = True if value in ['True', 'true', '1', 1] else False
                 
                 value_list.append(value)
             
@@ -241,15 +237,13 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
                 continue
             
             # Insert record
-            conn.execute(sql, value_list)
+            with get_db_cursor() as cursor:
+                cursor.execute(sql, value_list)
             inserted_count += 1
             existing_records.add(record_tuple)
             
         except Exception as e:
             errors.append(f"Erro na linha {i+1}: {e}")
-    
-    conn.commit()
-    conn.close()
     
     return inserted_count, duplicate_count, errors
 
@@ -357,23 +351,19 @@ def alter_table_add_column(table_name: str, field: dict) -> None:
     }
     col_name = sanitize_identifier(field['name'])
     sql_type = type_map.get(field['type'], "TEXT")
-    # SQLite's ALTER TABLE ADD COLUMN does not support IF NOT EXISTS; we
-    # ignore errors on duplicate columns by catching the exception.
+    # PostgreSQL's ALTER TABLE ADD COLUMN supports IF NOT EXISTS
     try:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {sql_type}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    finally:
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {sql_type}")
+    except Exception as e:
+        # Log error but don't fail
+        st.warning(f"Erro ao adicionar coluna {col_name}: {e}")
 
 
 def drop_table(table_name: str) -> None:
     """Drop the specified table from the database."""
-    conn = get_db_connection()
-    conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-    conn.commit()
-    conn.close()
+    with get_db_cursor() as cursor:
+        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
 
 def login_screen() -> None:

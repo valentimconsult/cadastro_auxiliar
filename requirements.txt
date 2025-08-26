@@ -4,3 +4,4 @@ Pillow
 flask
 flask-cors
 openpyxl
+psycopg2-binary

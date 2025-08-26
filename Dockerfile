@@ -19,6 +19,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Instalar dependencias do sistema
 RUN apt-get update && apt-get install -y \
     curl \
+    libpq-dev \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
 # Atualizar pip e instalar dependencias Python

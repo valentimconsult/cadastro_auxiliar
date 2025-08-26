@@ -1,6 +1,6 @@
-# Sistema de Cadastro - Streamlit
+# Sistema de Cadastro Streamlit com PostgreSQL
 
-Aplicacao web completa para cadastro de dados desenvolvida com Streamlit, Docker e API REST.
+Sistema completo de cadastros auxiliares desenvolvido em Streamlit, utilizando PostgreSQL como banco de dados principal, com API REST e containerizacao Docker.
 
 ## 🚀 Caracteristicas
 
@@ -8,387 +8,285 @@ Aplicacao web completa para cadastro de dados desenvolvida com Streamlit, Docker
 - ✅ Interface web amigavel para cadastro de dados
 - ✅ Sistema de autenticacao de usuarios
 - ✅ Criacao dinamica de tabelas
-- ✅ **Gerenciamento completo de registros** (adicionar, visualizar, editar, excluir)
-- ✅ **Carga em lote via CSV** com controle de duplicidade
-- ✅ **Validacao automatica de dados**
-- ✅ **API REST para acesso externo** ao banco de dados
-- ✅ **Acesso via DBeaver e outros clientes SQLite**
-- ✅ Persistencia de dados em SQLite
+- ✅ Gerenciamento completo de registros (CRUD)
+- ✅ Carga em lote via CSV com controle de duplicidade
+- ✅ Validacao automatica de dados
+- ✅ API REST para acesso externo
+- ✅ Banco PostgreSQL robusto e escalavel
 - ✅ Deploy via Docker Compose
-- ✅ **Script PowerShell para gerenciamento** (Windows)
+- ✅ Scripts de inicializacao para Windows e Linux
 
 ### **Funcionalidades Avancadas**
-- 🔄 **Sincronizacao remota** de banco de dados
-- 📊 **Exportacao de dados** em CSV, JSON, Excel
-- 🔍 **Queries SQL customizadas** via API
-- 📈 **Estatisticas e relatorios** do banco
-- 🛡️ **Controle de duplicidade** automatico
-- 📋 **Templates CSV** para carga em lote
-- 🌐 **Acesso multiplo** (web, API, clientes SQLite)
+- 🔄 Migracao automatica de dados
+- 📊 Exportacao de dados em CSV, JSON, Excel
+- 🔍 Queries SQL customizadas via API
+- 📈 Estatisticas e relatorios do banco
+- 🛡️ Controle de duplicidade automatico
+- 📋 Templates CSV para carga em lote
+- 🌐 Acesso multiplo (web, API, clientes PostgreSQL)
+
+## 🏗️ Arquitetura
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Streamlit     │    │   API Server    │    │   PostgreSQL    │
+│   (Porta 8503)  │◄──►│   (Porta 5000)  │◄──►│   (Porta 5436)  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
 
 ## 📋 Pre-requisitos
 
-- Docker
-- Docker Compose
-- Python 3.8+ (para scripts locais)
+- Docker Desktop instalado e rodando
+- PowerShell (Windows) ou Terminal (Linux/Mac)
+- Portas 8503, 5000 e 5436 disponiveis
 
 ## 🚀 Instalacao e Uso
 
-### 1. Clonar o repositorio
-```bash
-git clone <url-do-repositorio>
-cd cadastro_streamlit
-```
+### **Windows (PowerShell)**
 
-### 2. Executar com Docker Compose
-
-#### **Opcao A: Comando direto**
 ```powershell
-# Primeira execucao (build da imagem)
-docker-compose up --build
-
-# Execucoes subsequentes
-docker-compose up
-
-# Executar em background
-docker-compose up -d
+# Executar como Administrador
+cd "C:\valentim_consult\projetos_sistemas\cadastros_auxiliares\cadastro_streamlit"
+.\scripts\start-app-postgres.ps1
 ```
 
-#### **Opcao B: Script PowerShell (Windows)**
-```powershell
-# Menu interativo
-.\start-app.ps1
-
-# Comandos diretos
-.\start-app.ps1 start     # Iniciar
-.\start-app.ps1 stop      # Parar
-.\start-app.ps1 restart   # Reiniciar
-.\start-app.ps1 logs      # Ver logs
-.\start-app.ps1 status    # Ver status
-.\start-app.ps1 optimize  # Otimizar sistema
-```
-
-#### **Opcao C: Script Bash (Linux)**
-```bash
-# Tornar executável
-chmod +x start-app.sh
-
-# Menu interativo
-./start-app.sh
-
-# Comandos diretos
-./start-app.sh start     # Iniciar
-./start-app.sh stop      # Parar
-./start-app.sh restart   # Reiniciar
-./start-app.sh logs      # Ver logs
-./start-app.sh status    # Ver status
-./start-app.sh optimize  # Otimizar sistema
-```
-
-### 3. Acessar a aplicacao
-
-- **Interface Web**: http://localhost:8501
-- **API REST**: http://localhost:5000/api
-- **Credenciais**: admin/admin
-
-## 🔧 API REST
-
-### **Endpoints Principais**
+### **Linux/Mac (Terminal)**
 
 ```bash
-# Health Check
-GET http://localhost:5000/api/health
+# Dar permissao de execucao
+chmod +x scripts/start-app-postgres.sh
 
-# Listar tabelas
-GET http://localhost:5000/api/tables
-
-# Dados de uma tabela
-GET http://localhost:5000/api/tables/{nome}
-
-# Exportar dados
-GET http://localhost:5000/api/tables/{nome}/export?format=csv
-GET http://localhost:5000/api/tables/{nome}/export?format=json
-GET http://localhost:5000/api/tables/{nome}/export?format=excel
-
-# Gerenciar registros
-GET http://localhost:5000/api/tables/{nome}/records/{id} - Obter registro
-PUT http://localhost:5000/api/tables/{nome}/records/{id} - Atualizar registro
-DELETE http://localhost:5000/api/tables/{nome}/records/{id} - Excluir registro
-
-# Schema da tabela
-GET http://localhost:5000/api/tables/{nome}/schema
-
-# Estatisticas do banco
-GET http://localhost:5000/api/stats
-
-# Query SQL customizada (apenas SELECT)
-POST http://localhost:5000/api/query
-Content-Type: application/json
-{
-  "query": "SELECT * FROM tabela WHERE campo = 'valor'"
-}
+# Executar
+./scripts/start-app-postgres.sh
 ```
 
-### **Exemplo de Uso**
-```python
-import requests
+### **Manual**
 
-# Testar conexao
-response = requests.get("http://localhost:5000/api/health")
-print(response.json())
-
-# Listar tabelas
-response = requests.get("http://localhost:5000/api/tables")
-tables = response.json()['tables']
-for table in tables:
-    print(f"- {table['name']}: {table['row_count']} registros")
-```
-
-## 📊 Carga em Lote
-
-### **Como Usar**
-
-1. **Criar tabela** na interface web
-2. **Acessar "Carga em lote"** na pagina de gerenciamento
-3. **Baixar template CSV** com as colunas da tabela
-4. **Preencher dados** no arquivo CSV
-5. **Fazer upload** e configurar opcoes
-6. **Importar dados** com controle de duplicidade
-
-### **Caracteristicas**
-- ✅ **Template automatico** baseado na estrutura da tabela
-- ✅ **Validacao de tipos** de dados
-- ✅ **Controle de duplicidade** automatico
-- ✅ **Modo preview** antes da importacao
-- ✅ **Relatorio detalhado** da importacao
-- ✅ **Suporte a CSV** com encoding UTF-8
-
-## 🌐 Acesso Remoto ao Banco
-
-### **Para VM Remota**
-
-Quando o Docker esta rodando em uma VM (AWS, Azure, etc.):
-
-#### **Solucao 1: Script de Sincronizacao**
 ```bash
-# Instalar dependencias
-pip install requests pandas
+# Construir e iniciar containers
+docker-compose up --build -d
 
-# Sincronizar banco remoto
-python sync_remote_db.py --api-url http://IP_DA_VM:5000/api
+# Verificar status
+docker-compose ps
 
-# Testar conexao
-python sync_remote_db.py --api-url http://IP_DA_VM:5000/api --test-connection
-
-# Ver estatisticas
-python sync_remote_db.py --api-url http://IP_DA_VM:5000/api --stats-only
+# Ver logs
+docker-compose logs -f
 ```
 
-#### **Solucao 2: DBeaver com arquivo local**
-1. Execute o script de sincronizacao
-2. Abra DBeaver
-3. Nova Conexao > SQLite
-4. Database: `data_local.db`
-5. Test Connection > Finish
+## 🌐 Acessos
 
-#### **Solucao 3: Tunel SSH**
+- **Streamlit App**: http://localhost:8503
+- **API Server**: http://localhost:5000
+- **PostgreSQL**: localhost:5436
+
+## 🗄️ Configuracao do Banco
+
+### **Credenciais Padrao**
+
+- **Host**: localhost
+- **Porta**: 5436
+- **Database**: cadastro_db
+- **Usuario**: cadastro_user
+- **Senha**: cadastro_password
+
+### **Usuario Admin Padrao**
+
+- **Usuario**: admin
+- **Senha**: admin
+
+## 📊 Migracao de Dados
+
+Se voce tem dados existentes no SQLite, use o script de migracao:
+
 ```bash
-# Criar tunel SSH
-ssh -L 5000:localhost:5000 usuario@IP_DA_VM
-
-# Acessar localmente
-curl http://localhost:5000/api/health
+# Executar migracao
+python migrate_to_postgres.py
 ```
 
-## 🛠️ Comandos Utilitarios
+O script ira:
+1. Conectar ao PostgreSQL
+2. Carregar dados do SQLite
+3. Criar tabelas no PostgreSQL
+4. Migrar todos os dados
+5. Manter usuarios e configuracoes
 
-### **Docker Compose**
-```powershell
-# Parar aplicacao
+## 🔧 Comandos Uteis
+
+### **Docker**
+
+```bash
+# Ver status dos containers
+docker-compose ps
+
+# Ver logs em tempo real
+docker-compose logs -f
+
+# Parar sistema
 docker-compose down
 
 # Parar e remover volumes
 docker-compose down -v
 
-# Ver logs
-docker-compose logs -f
-
-# Rebuild da imagem
-docker-compose build --no-cache
-
-# Executar apenas um servico
-docker-compose up cadastro-app
+# Reconstruir containers
+docker-compose up --build -d
 ```
 
-### **Script PowerShell**
-```powershell
-# Menu completo
-.\start-app.ps1
+### **Banco de Dados**
 
-# Comandos diretos
-.\start-app.ps1 start    # Iniciar
-.\start-app.ps1 stop     # Parar
-.\start-app.ps1 restart  # Reiniciar
-.\start-app.ps1 logs     # Ver logs
-.\start-app.ps1 build    # Rebuild
-.\start-app.ps1 clean    # Limpar Docker
-.\start-app.ps1 status   # Ver status
+```bash
+# Conectar ao PostgreSQL
+docker exec -it cadastro-postgres psql -U cadastro_user -d cadastro_db
+
+# Ver tabelas
+\dt
+
+# Ver estrutura de uma tabela
+\d nome_da_tabela
+
+# Sair
+\q
 ```
 
-## 📁 Estrutura do Projeto
+### **Logs**
+
+```bash
+# Logs do Streamlit
+docker-compose logs -f cadastro-app
+
+# Logs da API
+docker-compose logs -f api-server
+
+# Logs do PostgreSQL
+docker-compose logs -f postgres
+```
+
+## 🛠️ Desenvolvimento
+
+### **Estrutura de Arquivos**
 
 ```
 cadastro_streamlit/
-├── streamlit_app.py          # Aplicacao principal
-├── api_server.py             # API REST
-├── docker-compose.yml        # Configuracao Docker
-├── Dockerfile               # Imagem Docker
-├── requirements.txt         # Dependencias Python
-├── start-app.ps1           # Script PowerShell
-├── sync_remote_db.py       # Sincronizacao remota
-├── db_connection_example.py # Exemplos de conexao
-├── data/                   # Dados SQLite
-├── config/                 # Configuracoes
-├── logs/                   # Logs da aplicacao
-├── README.md              # Documentacao principal
-├── CARGA_EM_LOTE.md       # Guia carga em lote
-├── ACESSO_EXTERNO_BANCO.md # Guia acesso externo
-├── ACESSO_REMOTO_DBEAVER.md # Guia acesso remoto
-└── exemplo_uso_remoto.md   # Exemplos praticos
+├── 📁 scripts/                    # Scripts de inicializacao e utilitarios
+│   ├── start-app-postgres.ps1     # Script de inicializacao (Windows)
+│   ├── start-app-postgres.sh      # Script de inicializacao (Linux/Mac)
+│   └── migrate_to_postgres.py     # Script de migracao de dados
+├── 📁 database/                   # Configuracoes e scripts do banco
+│   ├── db_config.py               # Configuracao de conexao PostgreSQL
+│   └── init-db.sql                # Script de inicializacao do banco
+├── 📁 docs/                       # Documentacao adicional
+│   ├── exemplo_uso_remoto.md      # Exemplos de uso remoto
+│   └── ACESSO_EXTERNO_BANCO.md    # Guia de acesso externo
+├── 📁 data/                       # Dados da aplicacao
+├── 🐳 docker-compose.yml          # Configuracao Docker
+├── 🐳 Dockerfile                  # Imagem Docker
+├── 📋 requirements.txt            # Dependencias Python
+├── 🌐 streamlit_app.py            # App principal Streamlit
+├── 🔌 api_server.py               # API REST Flask
+├── ⚙️ config.json                 # Configuracoes da aplicacao
+├── 📖 README.md                   # Documentacao principal
+└── 🚫 .gitignore                  # Arquivos ignorados pelo Git
 ```
 
-## 🔧 Configuracao de Ambiente
+### **Modificando o Sistema**
 
-### **Variaveis de Ambiente**
-```yaml
-# docker-compose.yml
-environment:
-  - STREAMLIT_SERVER_PORT=8501
-  - STREAMLIT_SERVER_HEADLESS=true
-  - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-  - FLASK_APP=api_server.py
-  - FLASK_ENV=production
-```
+1. **Alterar banco**: Modifique `db_config.py`
+2. **Alterar API**: Modifique `api_server.py`
+3. **Alterar interface**: Modifique `streamlit_app.py`
+4. **Alterar Docker**: Modifique `docker-compose.yml`
 
-### **Volumes**
-```yaml
-volumes:
-  - ./data:/app/data          # Dados SQLite
-  - ./config:/app/config      # Configuracoes
-  - ./logs:/app/logs          # Logs
-```
+### **Adicionando Novas Dependencias**
 
-## 🛠️ Troubleshooting
-
-### **Problema: Porta 8501 ja esta em uso**
-```powershell
-# Verificar processos na porta
-netstat -ano | findstr :8501
-
-# Alterar porta no docker-compose.yml
-ports:
-  - "8502:8501"  # Muda para porta 8502
-```
-
-### **Problema: API nao responde**
 ```bash
-# Verificar logs
+# Editar requirements.txt
+echo "nova_dependencia==1.0.0" >> requirements.txt
+
+# Reconstruir container
+docker-compose up --build -d
+```
+
+## 🔍 Troubleshooting
+
+### **PostgreSQL nao inicia**
+
+```bash
+# Ver logs
+docker-compose logs postgres
+
+# Verificar se porta esta em uso
+netstat -an | grep 5436
+
+# Parar e reiniciar
+docker-compose down
+docker-compose up -d
+```
+
+### **Erro de conexao**
+
+```bash
+# Verificar se containers estao rodando
+docker-compose ps
+
+# Testar conexao com banco
+docker exec cadastro-postgres pg_isready -U cadastro_user -d cadastro_db
+
+# Verificar variaveis de ambiente
+docker-compose config
+```
+
+### **Problemas de permissao**
+
+```bash
+# Windows: Executar PowerShell como Administrador
+# Linux/Mac: Verificar permissoes dos arquivos
+chmod +x *.sh
+```
+
+## 📈 Monitoramento
+
+### **Health Checks**
+
+- **Streamlit**: http://localhost:8503/_stcore/health
+- **API**: http://localhost:5000/api/health
+- **PostgreSQL**: Verificado automaticamente pelo Docker
+
+### **Logs**
+
+```bash
+# Logs consolidados
+docker-compose logs
+
+# Logs de um servico especifico
+docker-compose logs cadastro-app
 docker-compose logs api-server
-
-# Testar localmente
-curl http://localhost:5000/api/health
-
-# Verificar firewall
-sudo ufw allow 5000
+docker-compose logs postgres
 ```
 
-### **Problema: DBeaver nao conecta**
-```bash
-# Verificar arquivo sincronizado
-ls -la data_local.db
+## 🔒 Seguranca
 
-# Testar SQLite
-sqlite3 data_local.db ".tables"
-```
+- **Porta PostgreSQL**: 5436 (nao conflita com instalacoes locais)
+- **Usuarios**: Gerenciados pelo sistema
+- **Senhas**: Hash SHA-256
+- **CORS**: Configurado para desenvolvimento
 
-## 📚 Documentacao Adicional
+## 📝 Notas Importantes
 
-### **Guias Detalhados**
-- 📋 `CARGA_EM_LOTE.md` - Funcionalidade de carga em lote
-- 📝 `EDICAO_REGISTROS.md` - Edição e exclusão de registros
-- 🌐 `ACESSO_EXTERNO_BANCO.md` - Acesso externo ao banco
-- 🔗 `ACESSO_REMOTO_DBEAVER.md` - Acesso remoto via DBeaver
-- 📖 `exemplo_uso_remoto.md` - Exemplos praticos
-- 🐧 `README_LINUX.md` - Deploy completo no Linux
+1. **Primeira execucao**: Pode demorar para baixar imagens Docker
+2. **Dados**: Sao persistidos em volume Docker
+3. **Backup**: Sempre faca backup antes de atualizacoes
+4. **Portas**: Verifique se nao estao em uso por outros servicos
 
-### **Scripts de Exemplo**
-- `sync_remote_db.py` - Sincronizacao de banco remoto
-- `db_connection_example.py` - Exemplos de conexao
-- `start-app.ps1` - Gerenciador PowerShell (Windows)
-- `start-app.sh` - Gerenciador Bash (Linux)
+## 🤝 Suporte
 
-## 🎯 Casos de Uso
+Para problemas ou duvidas:
 
-### **Desenvolvimento Local**
-1. Execute `docker-compose up --build`
-2. Acesse http://localhost:8501
-3. Use a interface web para cadastros
-4. Use a API para integracoes
+1. Verifique os logs dos containers
+2. Teste a conexao com o banco
+3. Verifique se todas as portas estao disponiveis
+4. Consulte a documentacao do Docker e PostgreSQL
 
-### **Deploy em VM**
-1. Configure Docker na VM
-2. Execute `docker-compose up -d`
-3. Abra porta 5000 no firewall
-4. Use scripts de sincronizacao
+## 📚 Recursos Adicionais
 
-### **Integracao com Outros Sistemas**
-1. Use a API REST para consultas
-2. Sincronize dados com scripts
-3. Conecte DBeaver ao arquivo local
-4. Exporte dados em diferentes formatos
-
-## 🔄 Producao
-
-### **Recomendacoes**
-1. ✅ Use HTTPS em producao
-2. ✅ Implemente autenticacao na API
-3. ✅ Configure backup automatico
-4. ✅ Monitore logs e performance
-5. ✅ Use secrets para senhas
-
-### **Exemplo com Nginx**
-```yaml
-# Descomente no docker-compose.yml
-nginx:
-  image: nginx:alpine
-  ports:
-    - "80:80"
-  volumes:
-    - ./nginx.conf:/etc/nginx/nginx.conf:ro
-  depends_on:
-    - cadastro-app
-```
-
-## 🤝 Contribuicao
-
-1. Fork o projeto
-2. Crie uma branch para sua feature
-3. Commit suas mudancas
-4. Push para a branch
-5. Abra um Pull Request
-
-## 📄 Licenca
-
-Este projeto esta sob a licenca MIT. Veja o arquivo LICENSE para mais detalhes.
-
-## 📞 Suporte
-
-Para duvidas ou problemas:
-1. Verifique a documentacao
-2. Consulte os guias detalhados
-3. Verifique os logs da aplicacao
-4. Teste com os scripts de exemplo
-
----
-
-**🎉 Sistema de Cadastro - Versao Completa com API REST, Carga em Lote e Acesso Remoto!** 
+- [Documentacao Docker](https://docs.docker.com/)
+- [Documentacao PostgreSQL](https://www.postgresql.org/docs/)
+- [Documentacao Streamlit](https://docs.streamlit.io/)
+- [Documentacao Flask](https://flask.palletsprojects.com/) 

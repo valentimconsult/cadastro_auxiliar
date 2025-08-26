@@ -1,8 +1,38 @@
-# Docker Compose para Cadastro Streamlit - Versao Otimizada
+# Docker Compose para Cadastro Streamlit - Versao Otimizada com PostgreSQL
 # Compativel com: Docker Compose v2+, Ubuntu 24, Raspberry Pi 5 (ARM64)
 # Especificacao Compose mais recente (sem versao declarada)
 
 services:
+  # Servico PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: cadastro-postgres
+    environment:
+      - POSTGRES_DB=cadastro_db
+      - POSTGRES_USER=cadastro_user
+      - POSTGRES_PASSWORD=cadastro_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5436:5432"  # Porta 5436 para evitar conflitos
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    restart: unless-stopped
+    networks:
+      - cadastro-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
   cadastro-app:
     build:
       context: .
@@ -13,7 +43,7 @@ services:
         - linux/arm64
     container_name: cadastro-streamlit
     ports:
-      - "8501:8501"
+      - "8503:8501"
     volumes:
       # Volume para persistir os dados da aplicacao
       - ./data:/app/data:rw
@@ -27,12 +57,21 @@ services:
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
+      # Configuracoes do banco PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=cadastro_db
+      - POSTGRES_USER=cadastro_user
+      - POSTGRES_PASSWORD=cadastro_password
       # Otimizacoes para Raspberry Pi 5
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     restart: unless-stopped
     networks:
       - cadastro-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 30s
@@ -74,6 +113,12 @@ services:
     environment:
       - FLASK_APP=api_server.py
       - FLASK_ENV=production
+      # Configuracoes do banco PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=cadastro_db
+      - POSTGRES_USER=cadastro_user
+      - POSTGRES_PASSWORD=cadastro_password
       # Otimizacoes para Raspberry Pi 5
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
@@ -81,6 +126,9 @@ services:
     restart: unless-stopped
     networks:
       - cadastro-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
       interval: 30s
@@ -100,6 +148,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
 
 networks:
   cadastro-network:
