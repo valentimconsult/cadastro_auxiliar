@@ -1,6 +1,7 @@
-# Docker Compose para Cadastro Streamlit - Versao Otimizada com PostgreSQL
-# Compativel com: Docker Compose v2+, Ubuntu 24, Raspberry Pi 5 (ARM64)
-# Especificacao Compose mais recente (sem versao declarada)
+# Docker Compose para Cadastro Streamlit - Versao Simplificada
+# Compativel com Docker Compose v1 e v2 (incluindo Raspberry Pi)
+
+version: '3.8'
 
 services:
   # Servico PostgreSQL
@@ -13,43 +14,24 @@ services:
       - POSTGRES_PASSWORD=cadastro_password
       - POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C
     ports:
-      - "5436:5432"  # Porta 5436 para evitar conflitos
+      - "5436:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./database/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     restart: unless-stopped
     networks:
       - cadastro-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
 
   cadastro-app:
     build:
       context: .
       dockerfile: Dockerfile
-      # Suporte multiplataforma (x86_64 e ARM64)
-      platforms:
-        - linux/amd64
-        - linux/arm64
     container_name: cadastro-streamlit
     ports:
       - "8503:8501"
     volumes:
-      # Volume para persistir os dados da aplicacao
       - ./data:/app/data:rw
-      # Volume para persistir arquivos de configuracao
       - ./config:/app/config:rw
-      # Volume para logs (opcional)
       - ./logs:/app/logs:rw
     environment:
       - STREAMLIT_SERVER_PORT=8501
@@ -57,69 +39,38 @@ services:
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
-      # Configuracoes do banco PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=cadastro_db
       - POSTGRES_USER=cadastro_user
       - POSTGRES_PASSWORD=cadastro_password
-      # Otimizacoes para Raspberry Pi 5
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     restart: unless-stopped
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    # Otimizacoes para Raspberry Pi 5
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 512M
-    # Configuracoes de logging otimizadas
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - postgres
 
   api-server:
     build:
       context: .
       dockerfile: Dockerfile
-      # Suporte multiplataforma (x86_64 e ARM64)
-      platforms:
-        - linux/amd64
-        - linux/arm64
     container_name: cadastro-api
     ports:
       - "5000:5000"
     volumes:
-      # Volume para persistir os dados da aplicacao
       - ./data:/app/data:rw
-      # Volume para persistir arquivos de configuracao
       - ./config:/app/config:rw
-      # Volume para logs (opcional)
       - ./logs:/app/logs:rw
     environment:
       - FLASK_APP=api_server.py
       - FLASK_ENV=production
-      # Configuracoes do banco PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=cadastro_db
       - POSTGRES_USER=cadastro_user
       - POSTGRES_PASSWORD=cadastro_password
-      # Otimizacoes para Raspberry Pi 5
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     command: ["python", "api_server.py"]
@@ -127,27 +78,7 @@ services:
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    # Otimizacoes para Raspberry Pi 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
-    # Configuracoes de logging otimizadas
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - postgres
 
 volumes:
   postgres_data:
@@ -155,8 +86,4 @@ volumes:
 
 networks:
   cadastro-network:
-    driver: bridge
-    # Configuracoes de rede otimizadas
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16 
+    driver: bridge 

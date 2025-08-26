@@ -60,6 +60,22 @@ chmod +x scripts/start-app-postgres.sh
 ./scripts/start-app-postgres.sh
 ```
 
+### **Raspberry Pi (ARM64)**
+
+```bash
+# Navegar para o diretorio
+cd ~/infra/docker/cadastro_auxiliar/cadastro_auxiliar
+
+# Dar permissao de execucao
+chmod +x scripts/start-app-postgres.sh
+
+# Executar
+./scripts/start-app-postgres.sh
+
+# Ou executar manualmente
+docker-compose up --build -d
+```
+
 ### **Manual**
 
 ```bash
@@ -205,6 +221,19 @@ docker-compose up --build -d
 ```
 
 ## 🔍 Troubleshooting
+
+### **Raspberry Pi - Docker Compose**
+
+Se voce receber erro sobre opcoes nao suportadas:
+
+```bash
+# Verificar versao do Docker Compose
+docker-compose --version
+
+# Se for versao antiga, o arquivo ja foi simplificado
+# Caso contrario, execute:
+docker-compose up --build -d
+```
 
 ### **PostgreSQL nao inicia**
 
