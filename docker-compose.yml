@@ -5,7 +5,7 @@ services:
   # Servico PostgreSQL
   postgres:
     image: postgres:15-alpine
-    container_name: cadastro-postgres
+    container_name: cadastro_banco
     environment:
       - POSTGRES_DB=cadastro_db
       - POSTGRES_USER=cadastro_user
@@ -24,7 +24,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cadastro-streamlit
+    container_name: cadastro_app
     ports:
       - "8503:8501"
     volumes:
@@ -54,7 +54,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cadastro-api
+    container_name: cadastro_api
     ports:
       - "5000:5000"
     volumes:

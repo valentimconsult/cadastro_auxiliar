@@ -14,17 +14,19 @@ if ! docker version > /dev/null 2>&1; then
 fi
 echo "✅ Docker esta rodando"
 
-# Parar containers existentes se houver
-echo "🛑 Parando containers existentes..."
-docker-compose down
+# Parar e remover containers existentes FORCADAMENTE
+echo "🛑 Parando e removendo containers existentes..."
+docker-compose down -v --remove-orphans
+docker system prune -f
 
-# Remover containers e volumes antigos (opcional)
-read -p "Deseja remover containers e volumes antigos? (s/N): " removeOld
-if [[ $removeOld =~ ^[Ss]$ ]]; then
-    echo "🗑️  Removendo containers e volumes antigos..."
-    docker-compose down -v
-    docker system prune -f
-fi
+# Remover containers com nomes conflitantes
+echo "🗑️  Removendo containers conflitantes..."
+docker rm -f cadastro-postgres cadastro-streamlit cadastro-api 2>/dev/null || true
+
+# Limpar redes e volumes orfaos
+echo "🧹  Limpando recursos orfaos..."
+docker network prune -f
+docker volume prune -f
 
 # Construir e iniciar containers
 echo "🏗️  Construindo e iniciando containers..."
