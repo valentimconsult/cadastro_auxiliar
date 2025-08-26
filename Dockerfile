@@ -1,8 +1,8 @@
-# Dockerfile otimizado para multiplataforma (x86_64 e ARM64)
-# Compativel com: Ubuntu 24, Raspberry Pi 5, Docker Compose v2+
+# Dockerfile otimizado para Raspberry Pi e sistemas ARM64
+# Compativel com: Ubuntu, Raspberry Pi 5, Docker Compose v1 e v2
 
-# Usar imagem base multiplataforma
-FROM --platform=$BUILDPLATFORM python:3.11-slim
+# Usar imagem base Python
+FROM python:3.11-slim
 
 # Metadados da imagem
 LABEL maintainer="Cadastro Streamlit App"
@@ -38,8 +38,6 @@ WORKDIR /app
 # Copiar arquivos da aplicacao
 COPY streamlit_app.py /app/
 COPY api_server.py /app/
-COPY users.json /app/
-COPY tables.json /app/
 COPY config.json /app/
 COPY data /app/data
 
