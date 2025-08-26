@@ -1,8 +1,6 @@
 # Docker Compose para Cadastro Streamlit - Versao Simplificada
 # Compativel com Docker Compose v1 e v2 (incluindo Raspberry Pi)
 
-version: '3.8'
-
 services:
   # Servico PostgreSQL
   postgres:
