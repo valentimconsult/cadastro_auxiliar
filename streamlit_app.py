@@ -7,7 +7,7 @@ from datetime import datetime
 import io
 import base64
 from PIL import Image
-from db_config import get_db_connection, get_db_cursor
+from database.db_config import get_db_connection, get_db_cursor
 
 
 # Paths for configuration and data.  The app writes all of its state into
@@ -107,7 +107,7 @@ def resize_logo_if_needed(logo_path: str, max_width: int = 300, max_height: int 
 
 def get_db_connection():
     """Return a connection to the PostgreSQL database."""
-    from db_config import get_db_connection as pg_get_connection
+    from database.db_config import get_db_connection as pg_get_connection
     return pg_get_connection()
 
 

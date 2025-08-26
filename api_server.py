@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 import io
 import base64
-from db_config import get_db_cursor
+from database.db_config import get_db_cursor
 
 app = Flask(__name__)
 CORS(app)  # Permitir CORS para acesso externo
@@ -19,7 +19,7 @@ TABLES_FILE = "tables.json"
 
 def get_db_connection():
     """Retorna conexao com o banco PostgreSQL."""
-    from db_config import get_db_connection as pg_get_connection
+    from database.db_config import get_db_connection as pg_get_connection
     return pg_get_connection()
 
 def load_tables_metadata():
