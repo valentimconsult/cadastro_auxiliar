@@ -1000,9 +1000,9 @@ def edit_record_form(table_meta: dict) -> None:
                         # Botões de submit DENTRO do form
                         col1, col2 = st.columns(2)
                         with col1:
-                            submitted = st.form_submit_button("Atualizar registro", key=f"submit_{form_key}")
+                            submitted = st.form_submit_button("Atualizar registro")
                         with col2:
-                            cancel = st.form_submit_button("Cancelar", key=f"cancel_{form_key}")
+                            cancel = st.form_submit_button("Cancelar")
                         
                         # Lógica de processamento FORA do form
                         if submitted:
@@ -1085,9 +1085,9 @@ def delete_record_form(table_meta: dict) -> None:
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        submitted = st.form_submit_button("Excluir registro", key=f"submit_{form_key}")
+                        submitted = st.form_submit_button("Excluir registro")
                     with col2:
-                        cancel = st.form_submit_button("Cancelar", key=f"cancel_{form_key}")
+                        cancel = st.form_submit_button("Cancelar")
                     
                     if submitted and confirm_delete:
                         # Excluir registro
