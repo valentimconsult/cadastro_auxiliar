@@ -16,6 +16,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./database/backups:/backups:rw
     restart: unless-stopped
     networks:
       - cadastro-network

@@ -893,19 +893,15 @@ def edit_record_form(table_meta: dict) -> None:
                 st.warning("Nenhum registro encontrado para editar.")
                 return
             
-                            # Selecionar registro para editar
+            # Selecionar registro para editar
             st.write("**Selecione o registro para editar:**")
-            
-            # Criar uma coluna de seleção com informações do registro
-            df_display = df.copy()
-            if 'id' in df_display.columns:
-                df_display['Selecionar'] = [f"ID: {row['id']}" for _, row in df.iterrows()]
             
             # Mostrar dados em formato de tabela com seleção
             selected_index = st.selectbox(
                 "Escolha o registro:",
                 options=df.index,
-                format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}"
+                format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}",
+                key=f"select_record_{table_meta['name']}"
             )
             
             if selected_index is not None:
@@ -929,14 +925,15 @@ def edit_record_form(table_meta: dict) -> None:
                     "Campos para editar:",
                     options=[field['name'] for field in table_meta['fields']],
                     default=[],
-                    key=f"fields_to_edit_{record_id}"
+                    key=f"fields_to_edit_{table_meta['name']}_{record_id}"
                 )
                 
                 if fields_to_edit:
                     st.write("**Formulário de edição:**")
                     
-                    # Formulário de edição
-                    with st.form(key=f"edit_record_{record_id}"):
+                    # Formulário de edição com chave única
+                    form_key = f"edit_record_{table_meta['name']}_{record_id}_{len(fields_to_edit)}"
+                    with st.form(key=form_key):
                         updated_values = {}
                         
                         for field in table_meta['fields']:
@@ -951,7 +948,7 @@ def edit_record_form(table_meta: dict) -> None:
                                     updated_values[field_name] = st.text_input(
                                         f"{field_name} (Texto)",
                                         value=str(current_value) if current_value is not None else "",
-                                        key=f"edit_{field_name}_{record_id}"
+                                        key=f"edit_{table_meta['name']}_{field_name}_{record_id}"
                                     )
                                 elif field_type == "int":
                                     # Tratar conversão de valores vazios ou nulos
@@ -964,7 +961,7 @@ def edit_record_form(table_meta: dict) -> None:
                                         f"{field_name} (Inteiro)",
                                         value=int_value,
                                         step=1,
-                                        key=f"edit_{field_name}_{record_id}"
+                                        key=f"edit_{table_meta['name']}_{field_name}_{record_id}"
                                     )
                                 elif field_type == "float":
                                     # Tratar conversão de valores vazios ou nulos
@@ -977,7 +974,7 @@ def edit_record_form(table_meta: dict) -> None:
                                         f"{field_name} (Decimal)",
                                         value=float_value,
                                         step=0.01,
-                                        key=f"edit_{field_name}_{record_id}"
+                                        key=f"edit_{table_meta['name']}_{field_name}_{record_id}"
                                     )
                                 elif field_type == "date":
                                     if current_value:
@@ -991,21 +988,21 @@ def edit_record_form(table_meta: dict) -> None:
                                     updated_values[field_name] = st.date_input(
                                         f"{field_name} (Data)",
                                         value=current_date,
-                                        key=f"edit_{field_name}_{record_id}"
+                                        key=f"edit_{table_meta['name']}_{field_name}_{record_id}"
                                     )
                                 elif field_type == "bool":
                                     updated_values[field_name] = st.checkbox(
                                         f"{field_name} (Sim/Não)",
                                         value=bool(current_value) if current_value is not None else False,
-                                        key=f"edit_{field_name}_{record_id}"
+                                        key=f"edit_{table_meta['name']}_{field_name}_{record_id}"
                                     )
-                            
-                            # Botões de submit DENTRO do form
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                submitted = st.form_submit_button("Atualizar registro")
-                            with col2:
-                                cancel = st.form_submit_button("Cancelar")
+                        
+                        # Botões de submit DENTRO do form
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            submitted = st.form_submit_button("Atualizar registro", key=f"submit_{form_key}")
+                        with col2:
+                            cancel = st.form_submit_button("Cancelar", key=f"cancel_{form_key}")
                         
                         # Lógica de processamento FORA do form
                         if submitted:
@@ -1036,9 +1033,9 @@ def edit_record_form(table_meta: dict) -> None:
                         if cancel:
                             st.info("Edição cancelada.")
                             st.experimental_rerun()
-                        if not fields_to_edit:
-                            st.info("Selecione pelo menos um campo para editar.")
-                            return
+                
+                if not fields_to_edit:
+                    st.info("Selecione pelo menos um campo para editar.")
                         
         except Exception as e:
             st.error(f"Erro ao carregar dados para edição: {e}")
@@ -1064,7 +1061,7 @@ def delete_record_form(table_meta: dict) -> None:
                 "Escolha o registro:",
                 options=df.index,
                 format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}",
-                key="delete_record_select"
+                key=f"delete_record_select_{table_meta['name']}"
             )
             
             if selected_index is not None:
@@ -1080,16 +1077,17 @@ def delete_record_form(table_meta: dict) -> None:
                     if field_name in record:
                         st.write(f"**{field_name}:** {record[field_name]}")
                 
-                # Confirmação de exclusão
-                with st.form(key=f"delete_record_{record_id}"):
+                # Confirmação de exclusão com chave única
+                form_key = f"delete_record_{table_meta['name']}_{record_id}"
+                with st.form(key=form_key):
                     st.warning("⚠️ Esta ação não pode ser desfeita!")
-                    confirm_delete = st.checkbox("Confirmo que desejo excluir este registro")
+                    confirm_delete = st.checkbox("Confirmo que desejo excluir este registro", key=f"confirm_{form_key}")
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        submitted = st.form_submit_button("Excluir registro")
+                        submitted = st.form_submit_button("Excluir registro", key=f"submit_{form_key}")
                     with col2:
-                        cancel = st.form_submit_button("Cancelar")
+                        cancel = st.form_submit_button("Cancelar", key=f"cancel_{form_key}")
                     
                     if submitted and confirm_delete:
                         # Excluir registro
