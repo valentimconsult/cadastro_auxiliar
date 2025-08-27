@@ -184,7 +184,6 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
     
     Returns a tuple (inserted_count, duplicate_count, errors)
     """
-    conn = get_db_connection()
     inserted_count = 0
     duplicate_count = 0
     errors = []
@@ -335,29 +334,30 @@ def validate_csv_data(df: pd.DataFrame, table_meta: dict) -> tuple:
     return len(errors) == 0, errors, validated_records
 
 
-def alter_table_add_column(table_name: str, field: dict) -> None:
-    """Add a new column to an existing table.
-
-    The field dict should contain 'name' and 'type' keys.  If the column
-    already exists the operation is a no‑op in SQLite.
-    """
-    conn = get_db_connection()
-    type_map = {
-        "text": "TEXT",
-        "int": "INTEGER",
-        "float": "REAL",
-        "date": "TEXT",
-        "bool": "INTEGER",
-    }
-    col_name = sanitize_identifier(field['name'])
-    sql_type = type_map.get(field['type'], "TEXT")
-    # PostgreSQL's ALTER TABLE ADD COLUMN supports IF NOT EXISTS
+def update_record(table_name: str, record_id: int, values: dict) -> bool:
+    """Atualiza um registro existente."""
     try:
         with get_db_cursor() as cursor:
-            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {sql_type}")
+            # Construir query de UPDATE
+            set_clause = ", ".join([f"{key} = %s" for key in values.keys()])
+            query = f"UPDATE {table_name} SET {set_clause} WHERE id = %s"
+            
+            # Preparar valores (excluir ID dos valores a atualizar)
+            update_values = list(values.values())
+            update_values.append(record_id)
+            
+            # Executar update
+            cursor.execute(query, update_values)
+            
+            if cursor.rowcount > 0:
+                return True
+            else:
+                st.warning("Nenhum registro foi atualizado. Verifique se o ID existe.")
+                return False
+                
     except Exception as e:
-        # Log error but don't fail
-        st.warning(f"Erro ao adicionar coluna {col_name}: {e}")
+        st.error(f"Erro ao atualizar registro: {e}")
+        return False
 
 
 def drop_table(table_name: str) -> None:
@@ -646,56 +646,54 @@ def add_record_form(table_meta: dict) -> None:
 def view_table_data(table_meta: dict) -> None:
     """Show the contents of a table in a data frame."""
     st.subheader("Visualizar dados")
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
-        
-        # Show statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total de registros", len(df))
-        with col2:
-            st.metric("Colunas", len(df.columns))
-        with col3:
-            if len(df) > 0:
-                # Check for potential duplicates (excluding ID)
-                data_cols = [col for col in df.columns if col != 'id']
-                if data_cols:
-                    duplicates = df.duplicated(subset=data_cols).sum()
-                    st.metric("Possíveis duplicados", duplicates)
+    with get_db_connection() as conn:
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
+            
+            # Show statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total de registros", len(df))
+            with col2:
+                st.metric("Colunas", len(df.columns))
+            with col3:
+                if len(df) > 0:
+                    # Check for potential duplicates (excluding ID)
+                    data_cols = [col for col in df.columns if col != 'id']
+                    if data_cols:
+                        duplicates = df.duplicated(subset=data_cols).sum()
+                        st.metric("Possíveis duplicados", duplicates)
+                    else:
+                        st.metric("Possíveis duplicados", 0)
                 else:
                     st.metric("Possíveis duplicados", 0)
-            else:
-                st.metric("Possíveis duplicados", 0)
-        
-        # Show data
-        st.write("**Dados da tabela:**")
-        st.dataframe(df)
-        
-        # Provide option to download as CSV
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Baixar CSV",
-            data=csv,
-            file_name=f"{table_meta['name']}.csv",
-            mime="text/csv"
-        )
-        
-        # Show data quality info
-        if len(df) > 0:
-            st.write("**Qualidade dos dados:**")
-            quality_df = pd.DataFrame({
-                'Coluna': df.columns,
-                'Tipo': df.dtypes,
-                'Valores únicos': [df[col].nunique() for col in df.columns],
-                'Valores nulos': df.isnull().sum().values
-            })
-            st.dataframe(quality_df)
             
-    except Exception as e:
-        st.error(f"Erro ao ler dados: {e}")
-    finally:
-        conn.close()
+            # Show data
+            st.write("**Dados da tabela:**")
+            st.dataframe(df)
+            
+            # Provide option to download as CSV
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Baixar CSV",
+                data=csv,
+                file_name=f"{table_meta['name']}.csv",
+                mime="text/csv"
+            )
+            
+            # Show data quality info
+            if len(df) > 0:
+                st.write("**Qualidade dos dados:**")
+                quality_df = pd.DataFrame({
+                    'Coluna': df.columns,
+                    'Tipo': df.dtypes,
+                    'Valores únicos': [df[col].nunique() for col in df.columns],
+                    'Valores nulos': df.isnull().sum().values
+                })
+                st.dataframe(quality_df)
+                
+        except Exception as e:
+            st.error(f"Erro ao ler dados: {e}")
 
 
 def add_field_to_table(table_meta: dict) -> None:
@@ -858,33 +856,28 @@ def get_record_by_id(table_name: str, record_id: int) -> dict:
 
 def update_record(table_name: str, record_id: int, values: dict) -> bool:
     """Atualiza um registro existente."""
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        
-        # Construir query de UPDATE
-        set_clause = ", ".join([f"{key} = ?" for key in values.keys()])
-        query = f"UPDATE {table_name} SET {set_clause} WHERE id = ?"
-        
-        # Preparar valores (excluir ID dos valores a atualizar)
-        update_values = list(values.values())
-        update_values.append(record_id)
-        
-        # Executar update
-        cursor.execute(query, update_values)
-        conn.commit()
-        
-        if cursor.rowcount > 0:
-            return True
-        else:
-            st.warning("Nenhum registro foi atualizado. Verifique se o ID existe.")
-            return False
+        with get_db_cursor() as cursor:
+            # Construir query de UPDATE
+            set_clause = ", ".join([f"{key} = %s" for key in values.keys()])
+            query = f"UPDATE {table_name} SET {set_clause} WHERE id = %s"
             
+            # Preparar valores (excluir ID dos valores a atualizar)
+            update_values = list(values.values())
+            update_values.append(record_id)
+            
+            # Executar update
+            cursor.execute(query, update_values)
+            
+            if cursor.rowcount > 0:
+                return True
+            else:
+                st.warning("Nenhum registro foi atualizado. Verifique se o ID existe.")
+                return False
+                
     except Exception as e:
         st.error(f"Erro ao atualizar registro: {e}")
         return False
-    finally:
-        conn.close()
 
 
 def edit_record_form(table_meta: dict) -> None:
@@ -892,234 +885,229 @@ def edit_record_form(table_meta: dict) -> None:
     st.subheader("Editar registro")
     
     # Buscar registros para seleção
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
-        
-        if len(df) == 0:
-            st.warning("Nenhum registro encontrado para editar.")
-            return
+    with get_db_connection() as conn:
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
             
-        # Selecionar registro para editar
-        st.write("**Selecione o registro para editar:**")
-        
-        # Criar uma coluna de seleção com informações do registro
-        df_display = df.copy()
-        if 'id' in df_display.columns:
-            df_display['Selecionar'] = [f"ID: {row['id']}" for _, row in df.iterrows()]
-        
-        # Mostrar dados em formato de tabela com seleção
-        selected_index = st.selectbox(
-            "Escolha o registro:",
-            options=df.index,
-            format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}"
-        )
-        
-        if selected_index is not None:
-            record = df.iloc[selected_index].to_dict()
-            record_id = record['id']
+            if len(df) == 0:
+                st.warning("Nenhum registro encontrado para editar.")
+                return
             
-            st.write(f"**Editando registro ID: {record_id}**")
+                            # Selecionar registro para editar
+            st.write("**Selecione o registro para editar:**")
             
-            # Mostrar dados atuais do registro
-            st.write("**Dados atuais do registro:**")
-            for field in table_meta['fields']:
-                field_name = field['name']
-                current_value = record.get(field_name, "")
-                st.write(f"**{field_name}:** {current_value}")
+            # Criar uma coluna de seleção com informações do registro
+            df_display = df.copy()
+            if 'id' in df_display.columns:
+                df_display['Selecionar'] = [f"ID: {row['id']}" for _, row in df.iterrows()]
             
-            st.write("---")
-            
-            # Seleção de campos para editar
-            st.write("**Selecione os campos que deseja editar:**")
-            fields_to_edit = st.multiselect(
-                "Campos para editar:",
-                options=[field['name'] for field in table_meta['fields']],
-                default=[],
-                key=f"fields_to_edit_{record_id}"
+            # Mostrar dados em formato de tabela com seleção
+            selected_index = st.selectbox(
+                "Escolha o registro:",
+                options=df.index,
+                format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}"
             )
             
-            if fields_to_edit:
-                st.write("**Formulário de edição:**")
+            if selected_index is not None:
+                record = df.iloc[selected_index].to_dict()
+                record_id = record['id']
                 
-                # Formulário de edição
-                with st.form(key=f"edit_record_{record_id}"):
-                    updated_values = {}
+                st.write(f"**Editando registro ID: {record_id}**")
+                
+                # Mostrar dados atuais do registro
+                st.write("**Dados atuais do registro:**")
+                for field in table_meta['fields']:
+                    field_name = field['name']
+                    current_value = record.get(field_name, "")
+                    st.write(f"**{field_name}:** {current_value}")
+                
+                st.write("---")
+                
+                # Seleção de campos para editar
+                st.write("**Selecione os campos que deseja editar:**")
+                fields_to_edit = st.multiselect(
+                    "Campos para editar:",
+                    options=[field['name'] for field in table_meta['fields']],
+                    default=[],
+                    key=f"fields_to_edit_{record_id}"
+                )
+                
+                if fields_to_edit:
+                    st.write("**Formulário de edição:**")
                     
-                    for field in table_meta['fields']:
-                        field_name = field['name']
+                    # Formulário de edição
+                    with st.form(key=f"edit_record_{record_id}"):
+                        updated_values = {}
                         
-                        # Só mostrar campos selecionados para edição
-                        if field_name in fields_to_edit:
-                            field_type = field['type']
-                            current_value = record.get(field_name, "")
+                        for field in table_meta['fields']:
+                            field_name = field['name']
                             
-                            if field_type == "text":
-                                updated_values[field_name] = st.text_input(
-                                    f"{field_name} (Texto)",
-                                    value=str(current_value) if current_value is not None else "",
-                                    key=f"edit_{field_name}_{record_id}"
-                                )
-                            elif field_type == "int":
-                                # Tratar conversão de valores vazios ou nulos
-                                try:
-                                    int_value = int(current_value) if current_value is not None and str(current_value).strip() != "" else 0
-                                except (ValueError, TypeError):
-                                    int_value = 0
+                            # Só mostrar campos selecionados para edição
+                            if field_name in fields_to_edit:
+                                field_type = field['type']
+                                current_value = record.get(field_name, "")
                                 
-                                updated_values[field_name] = st.number_input(
-                                    f"{field_name} (Inteiro)",
-                                    value=int_value,
-                                    step=1,
-                                    key=f"edit_{field_name}_{record_id}"
-                                )
-                            elif field_type == "float":
-                                # Tratar conversão de valores vazios ou nulos
-                                try:
-                                    float_value = float(current_value) if current_value is not None and str(current_value).strip() != "" else 0.0
-                                except (ValueError, TypeError):
-                                    float_value = 0.0
-                                
-                                updated_values[field_name] = st.number_input(
-                                    f"{field_name} (Decimal)",
-                                    value=float_value,
-                                    step=0.01,
-                                    key=f"edit_{field_name}_{record_id}"
-                                )
-                            elif field_type == "date":
-                                if current_value:
+                                if field_type == "text":
+                                    updated_values[field_name] = st.text_input(
+                                        f"{field_name} (Texto)",
+                                        value=str(current_value) if current_value is not None else "",
+                                        key=f"edit_{field_name}_{record_id}"
+                                    )
+                                elif field_type == "int":
+                                    # Tratar conversão de valores vazios ou nulos
                                     try:
-                                        current_date = pd.to_datetime(current_value).date()
-                                    except:
+                                        int_value = int(current_value) if current_value is not None and str(current_value).strip() != "" else 0
+                                    except (ValueError, TypeError):
+                                        int_value = 0
+                                    
+                                    updated_values[field_name] = st.number_input(
+                                        f"{field_name} (Inteiro)",
+                                        value=int_value,
+                                        step=1,
+                                        key=f"edit_{field_name}_{record_id}"
+                                    )
+                                elif field_type == "float":
+                                    # Tratar conversão de valores vazios ou nulos
+                                    try:
+                                        float_value = float(current_value) if current_value is not None and str(current_value).strip() != "" else 0.0
+                                    except (ValueError, TypeError):
+                                        float_value = 0.0
+                                    
+                                    updated_values[field_name] = st.number_input(
+                                        f"{field_name} (Decimal)",
+                                        value=float_value,
+                                        step=0.01,
+                                        key=f"edit_{field_name}_{record_id}"
+                                    )
+                                elif field_type == "date":
+                                    if current_value:
+                                        try:
+                                            current_date = pd.to_datetime(current_value).date()
+                                        except:
+                                            current_date = datetime.now().date()
+                                    else:
                                         current_date = datetime.now().date()
+                                    
+                                    updated_values[field_name] = st.date_input(
+                                        f"{field_name} (Data)",
+                                        value=current_date,
+                                        key=f"edit_{field_name}_{record_id}"
+                                    )
+                                elif field_type == "bool":
+                                    updated_values[field_name] = st.checkbox(
+                                        f"{field_name} (Sim/Não)",
+                                        value=bool(current_value) if current_value is not None else False,
+                                        key=f"edit_{field_name}_{record_id}"
+                                    )
+                            
+                            # Botões de submit DENTRO do form
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                submitted = st.form_submit_button("Atualizar registro")
+                            with col2:
+                                cancel = st.form_submit_button("Cancelar")
+                        
+                        # Lógica de processamento FORA do form
+                        if submitted:
+                            # Remover ID dos valores a atualizar
+                            if 'id' in updated_values:
+                                del updated_values['id']
+                            
+                            # Validar se há dados para atualizar
+                            if not updated_values:
+                                st.warning("Nenhum dado foi modificado.")
+                                return
+                            
+                            # Filtrar valores vazios para campos de texto
+                            filtered_values = {}
+                            for key, value in updated_values.items():
+                                if isinstance(value, str) and value.strip() == "":
+                                    filtered_values[key] = None  # Permitir valores NULL
                                 else:
-                                    current_date = datetime.now().date()
-                                
-                                updated_values[field_name] = st.date_input(
-                                    f"{field_name} (Data)",
-                                    value=current_date,
-                                    key=f"edit_{field_name}_{record_id}"
-                                )
-                            elif field_type == "bool":
-                                updated_values[field_name] = st.checkbox(
-                                    f"{field_name} (Sim/Não)",
-                                    value=bool(current_value) if current_value is not None else False,
-                                    key=f"edit_{field_name}_{record_id}"
-                                )
-                    
-                    # Botões de submit DENTRO do form
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        submitted = st.form_submit_button("Atualizar registro")
-                    with col2:
-                        cancel = st.form_submit_button("Cancelar")
-                
-                # Lógica de processamento FORA do form
-                if submitted:
-                    # Remover ID dos valores a atualizar
-                    if 'id' in updated_values:
-                        del updated_values['id']
-                    
-                    # Validar se há dados para atualizar
-                    if not updated_values:
-                        st.warning("Nenhum dado foi modificado.")
-                        return
-                    
-                    # Filtrar valores vazios para campos de texto
-                    filtered_values = {}
-                    for key, value in updated_values.items():
-                        if isinstance(value, str) and value.strip() == "":
-                            filtered_values[key] = None  # Permitir valores NULL
-                        else:
-                            filtered_values[key] = value
-                    
-                    # Atualizar registro
-                    if update_record(table_meta['name'], record_id, filtered_values):
-                        st.success("Registro atualizado com sucesso!")
-                        st.experimental_rerun()
-                    else:
-                        st.error("Erro ao atualizar registro.")
-                
-                if cancel:
-                    st.info("Edição cancelada.")
-                    st.experimental_rerun()
-            else:
-                st.info("Selecione pelo menos um campo para editar.")
-                return
-                    
-    except Exception as e:
-        st.error(f"Erro ao carregar dados para edição: {e}")
-        st.info("Tente recarregar a página ou verificar se a tabela existe.")
-    finally:
-        conn.close()
+                                    filtered_values[key] = value
+                            
+                            # Atualizar registro
+                            if update_record(table_meta['name'], record_id, filtered_values):
+                                st.success("Registro atualizado com sucesso!")
+                                st.experimental_rerun()
+                            else:
+                                st.error("Erro ao atualizar registro.")
+                        
+                        if cancel:
+                            st.info("Edição cancelada.")
+                            st.experimental_rerun()
+                        if not fields_to_edit:
+                            st.info("Selecione pelo menos um campo para editar.")
+                            return
+                        
+        except Exception as e:
+            st.error(f"Erro ao carregar dados para edição: {e}")
+            st.info("Tente recarregar a página ou verificar se a tabela existe.")
 
 
 def delete_record_form(table_meta: dict) -> None:
     """Interface para exclusão de registros."""
     st.subheader("Excluir registro")
     
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
-        
-        if len(df) == 0:
-            st.warning("Nenhum registro encontrado para excluir.")
-            return
+    with get_db_connection() as conn:
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
             
-        # Selecionar registro para excluir
-        st.write("**Selecione o registro para excluir:**")
-        
-        selected_index = st.selectbox(
-            "Escolha o registro:",
-            options=df.index,
-            format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}",
-            key="delete_record_select"
-        )
-        
-        if selected_index is not None:
-            record = df.iloc[selected_index].to_dict()
-            record_id = record['id']
+            if len(df) == 0:
+                st.warning("Nenhum registro encontrado para excluir.")
+                return
             
-            st.write(f"**Registro selecionado para exclusão:**")
-            st.write(f"**ID:** {record_id}")
+            # Selecionar registro para excluir
+            st.write("**Selecione o registro para excluir:**")
             
-            # Mostrar dados do registro
-            for field in table_meta['fields']:
-                field_name = field['name']
-                if field_name in record:
-                    st.write(f"**{field_name}:** {record[field_name]}")
+            selected_index = st.selectbox(
+                "Escolha o registro:",
+                options=df.index,
+                format_func=lambda x: f"ID: {df.iloc[x]['id']} - {' | '.join([f'{col}: {df.iloc[x][col]}' for col in df.columns[:3] if col != 'id'])}",
+                key="delete_record_select"
+            )
             
-            # Confirmação de exclusão
-            with st.form(key=f"delete_record_{record_id}"):
-                st.warning("⚠️ Esta ação não pode ser desfeita!")
-                confirm_delete = st.checkbox("Confirmo que desejo excluir este registro")
+            if selected_index is not None:
+                record = df.iloc[selected_index].to_dict()
+                record_id = record['id']
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    submitted = st.form_submit_button("Excluir registro")
-                with col2:
-                    cancel = st.form_submit_button("Cancelar")
+                st.write(f"**Registro selecionado para exclusão:**")
+                st.write(f"**ID:** {record_id}")
                 
-                if submitted and confirm_delete:
-                    # Excluir registro
-                    cursor = conn.cursor()
-                    cursor.execute(f"DELETE FROM {table_meta['name']} WHERE id = ?", (record_id,))
-                    conn.commit()
+                # Mostrar dados do registro
+                for field in table_meta['fields']:
+                    field_name = field['name']
+                    if field_name in record:
+                        st.write(f"**{field_name}:** {record[field_name]}")
+                
+                # Confirmação de exclusão
+                with st.form(key=f"delete_record_{record_id}"):
+                    st.warning("⚠️ Esta ação não pode ser desfeita!")
+                    confirm_delete = st.checkbox("Confirmo que desejo excluir este registro")
                     
-                    if cursor.rowcount > 0:
-                        st.success("Registro excluído com sucesso!")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        submitted = st.form_submit_button("Excluir registro")
+                    with col2:
+                        cancel = st.form_submit_button("Cancelar")
+                    
+                    if submitted and confirm_delete:
+                        # Excluir registro
+                        with get_db_cursor() as cursor:
+                            cursor.execute(f"DELETE FROM {table_meta['name']} WHERE id = %s", (record_id,))
+                            
+                            if cursor.rowcount > 0:
+                                st.success("Registro excluído com sucesso!")
+                                st.experimental_rerun()
+                            else:
+                                st.error("Erro ao excluir registro.")
+                    
+                    if cancel:
+                        st.info("Exclusão cancelada.")
                         st.experimental_rerun()
-                    else:
-                        st.error("Erro ao excluir registro.")
-                
-                if cancel:
-                    st.info("Exclusão cancelada.")
-                    st.experimental_rerun()
-                    
-    except Exception as e:
-        st.error(f"Erro ao carregar dados para exclusão: {e}")
-    finally:
-        conn.close()
+                        
+        except Exception as e:
+            st.error(f"Erro ao carregar dados para exclusão: {e}")
 
 
 def main() -> None:

@@ -90,8 +90,6 @@ def get_table_data(table_name):
         sort_by = request.args.get('sort_by', 'id')
         sort_order = request.args.get('sort_order', 'ASC')
         
-        conn = get_db_connection()
-        
         # Construir query com filtros
         where_clause = ""
         params = []
@@ -279,65 +277,48 @@ def get_database_stats():
         }), 500
 
 @app.route('/api/tables/<table_name>/records/<int:record_id>', methods=['PUT'])
-def update_record(table_name, record_id):
-    """Atualiza um registro especifico."""
+def update_record(table_name: str, record_id: int, values: dict) -> bool:
+    """Atualiza um registro existente."""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                "success": False,
-                "error": "Dados nao fornecidos"
-            }), 400
-        
-        # Construir query de UPDATE
-        set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
-        query = f"UPDATE {table_name} SET {set_clause} WHERE id = %s"
-        
-        # Preparar valores
-        update_values = list(data.values())
-        update_values.append(record_id)
-        
         with get_db_cursor() as cursor:
+            # Construir query de UPDATE
+            set_clause = ", ".join([f"{key} = %s" for key in values.keys()])
+            query = f"UPDATE {table_name} SET {set_clause} WHERE id = %s"
+            
+            # Preparar valores (excluir ID dos valores a atualizar)
+            update_values = list(values.values())
+            update_values.append(record_id)
+            
+            # Executar update
             cursor.execute(query, update_values)
             
             if cursor.rowcount > 0:
-            return jsonify({
-                "success": True,
-                "message": "Registro atualizado com sucesso",
-                "affected_rows": cursor.rowcount
-            })
-        else:
-            return jsonify({
-                "success": False,
-                "error": "Registro nao encontrado"
-            }), 404
-            
+                return True
+            else:
+                st.warning("Nenhum registro foi atualizado. Verifique se o ID existe.")
+                return False
+                
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-    finally:
-        conn.close()
+        st.error(f"Erro ao atualizar registro: {e}")
+        return False
+
 
 
 @app.route('/api/tables/<table_name>/records/<int:record_id>', methods=['DELETE'])
 def delete_record(table_name, record_id):
     """Exclui um registro especifico."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Verificar se o registro existe
-        cursor.execute(f"SELECT id FROM {table_name} WHERE id = ?", (record_id,))
-        if not cursor.fetchone():
-            return jsonify({
-                "success": False,
-                "error": "Registro nao encontrado"
-            }), 404
-        
         # Excluir registro
         with get_db_cursor() as cursor:
+            # Verificar se o registro existe
+            cursor.execute(f"SELECT id FROM {table_name} WHERE id = %s", (record_id,))
+            if not cursor.fetchone():
+                return jsonify({
+                    "success": False,
+                    "error": "Registro nao encontrado"
+                }), 404
+            
+            # Excluir registro
             cursor.execute(f"DELETE FROM {table_name} WHERE id = %s", (record_id,))
             
             return jsonify({
