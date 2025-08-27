@@ -7,7 +7,8 @@ from datetime import datetime
 import io
 import base64
 from PIL import Image
-from database.db_config import get_db_connection, get_db_cursor
+import psycopg2
+from database.db_config import get_db_connection, get_db_cursor, db_config
 
 
 # Paths for configuration and data.  The app writes all of its state into
@@ -364,6 +365,34 @@ def drop_table(table_name: str) -> None:
     """Drop the specified table from the database."""
     with get_db_cursor() as cursor:
         cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def alter_table_add_column(table_name: str, field_def: dict) -> None:
+    """Adiciona uma nova coluna a uma tabela existente."""
+    try:
+        with get_db_cursor() as cursor:
+            # Mapear tipos de dados
+            type_map = {
+                "text": "TEXT",
+                "int": "INTEGER",
+                "float": "REAL",
+                "date": "DATE",
+                "bool": "BOOLEAN",
+            }
+            
+            # Obter nome da coluna sanitizado
+            col_name = sanitize_identifier(field_def['name'])
+            sql_type = type_map.get(field_def['type'], "TEXT")
+            
+            # Executar ALTER TABLE
+            sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {sql_type}"
+            cursor.execute(sql)
+            
+            st.success(f"Coluna '{field_def['name']}' adicionada com sucesso!")
+            
+    except Exception as e:
+        st.error(f"Erro ao adicionar coluna: {e}")
+        raise
 
 
 def login_screen() -> None:
@@ -1091,14 +1120,45 @@ def delete_record_form(table_meta: dict) -> None:
                     
                     if submitted and confirm_delete:
                         # Excluir registro
-                        with get_db_cursor() as cursor:
+                        try:
+                            st.info(f"🔍 Iniciando exclusão do registro ID {record_id}")
+                            
+                            # Usar conexao direta para debug
+                            conn = psycopg2.connect(**db_config.get_connection_params())
+                            cursor = conn.cursor()
+                            
+                            st.info(f"📝 Executando: DELETE FROM {table_meta['name']} WHERE id = {record_id}")
+                            
+                            # Executar DELETE
                             cursor.execute(f"DELETE FROM {table_meta['name']} WHERE id = %s", (record_id,))
                             
-                            if cursor.rowcount > 0:
-                                st.success("Registro excluído com sucesso!")
+                            # Verificar resultado
+                            affected_rows = cursor.rowcount
+                            st.info(f"✅ Registros afetados: {affected_rows}")
+                            
+                            # Commit da transacao
+                            conn.commit()
+                            
+                            if affected_rows > 0:
+                                st.success(f"🎉 Registro ID {record_id} excluído com sucesso!")
+                                cursor.close()
+                                conn.close()
                                 st.experimental_rerun()
                             else:
-                                st.error("Erro ao excluir registro.")
+                                st.warning(f"⚠️ Nenhum registro foi excluído. ID {record_id} pode não existir.")
+                                cursor.close()
+                                conn.close()
+                                
+                        except Exception as e:
+                            st.error(f"❌ Erro ao excluir registro: {e}")
+                            st.info("🔍 Verifique os logs da aplicação para mais detalhes.")
+                            try:
+                                if 'cursor' in locals():
+                                    cursor.close()
+                                if 'conn' in locals():
+                                    conn.close()
+                            except:
+                                pass
                     
                     if cancel:
                         st.info("Exclusão cancelada.")
