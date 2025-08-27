@@ -19,11 +19,14 @@ Write-Host "🛑 Parando containers existentes..." -ForegroundColor Yellow
 docker-compose down
 
 # Remover containers e volumes antigos (opcional)
+Write-Host "⚠️  ATENCAO: Remover volumes apagara TODOS os dados do banco!" -ForegroundColor Red
 $removeOld = Read-Host "Deseja remover containers e volumes antigos? (s/N)"
 if ($removeOld -eq "s" -or $removeOld -eq "S") {
     Write-Host "🗑️  Removendo containers e volumes antigos..." -ForegroundColor Yellow
     docker-compose down -v
     docker system prune -f
+} else {
+    Write-Host "✅ Preservando dados do banco (volumes mantidos)" -ForegroundColor Green
 }
 
 # Construir e iniciar containers
