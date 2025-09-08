@@ -57,15 +57,93 @@ def save_users(users: dict) -> None:
 
 
 def load_tables_metadata() -> list:
-    """Load the table definitions from disk."""
-    with open(TABLES_FILE, encoding="utf-8") as f:
-        return json.load(f)
+    """Load the table definitions from the database."""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT table_name, display_name, description, columns, created_at, updated_at
+                FROM tables_metadata
+                ORDER BY created_at
+            """)
+            
+            metadata = []
+            for row in cursor.fetchall():
+                table_name, display_name, description, columns, created_at, updated_at = row
+                
+                # Converter JSONB para lista de campos
+                fields = []
+                if columns:
+                    # Se columns for string, fazer parse do JSON
+                    if isinstance(columns, str):
+                        try:
+                            columns = json.loads(columns)
+                        except json.JSONDecodeError as e:
+                            st.error(f"Erro ao fazer parse JSON da tabela {table_name}: {e}")
+                            continue
+                    
+                    # Agora columns deve ser uma lista
+                    if isinstance(columns, list):
+                        for field in columns:
+                            if isinstance(field, dict):
+                                fields.append({
+                                    'name': field.get('name', ''),
+                                    'type': field.get('type', 'text')
+                                })
+                            else:
+                                st.error(f"Campo invalido na tabela {table_name}: {field} (tipo: {type(field)})")
+                    else:
+                        st.error(f"Formato invalido de campos na tabela {table_name}. Esperado: list, Recebido: {type(columns)}")
+                else:
+                    st.warning(f"Tabela {table_name} nao tem campos definidos (columns = {columns})")
+                
+                metadata.append({
+                    'name': table_name,
+                    'display_name': display_name or table_name,
+                    'description': description,
+                    'fields': fields,
+                    'created_at': created_at.isoformat() if created_at else None,
+                    'updated_at': updated_at.isoformat() if updated_at else None
+                })
+            
+            return metadata
+            
+    except Exception as e:
+        st.error(f"Erro ao carregar metadados do banco: {e}")
+        return []
 
 
 def save_tables_metadata(metadata: list) -> None:
-    """Write the table definitions back to disk."""
-    with open(TABLES_FILE, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
+    """Save the table definitions to the database."""
+    try:
+        with get_db_cursor() as cursor:
+            for table_meta in metadata:
+                # Converter campos para JSONB
+                columns_json = json.dumps(table_meta['fields'])
+                
+                # Inserir ou atualizar metadados
+                cursor.execute("""
+                    INSERT INTO tables_metadata (table_name, display_name, description, columns, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (table_name) 
+                    DO UPDATE SET 
+                        display_name = EXCLUDED.display_name,
+                        description = EXCLUDED.description,
+                        columns = EXCLUDED.columns,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    table_meta['name'],
+                    table_meta.get('display_name', table_meta['name']),
+                    table_meta.get('description', ''),
+                    columns_json,
+                    table_meta.get('created_at'),
+                    table_meta.get('updated_at')
+                ))
+            
+            st.success("Metadados salvos no banco com sucesso!")
+            
+    except Exception as e:
+        st.error(f"Erro ao salvar metadados no banco: {e}")
+        raise
 
 
 def load_config() -> dict:
@@ -416,6 +494,12 @@ def login_screen() -> None:
 
 def page_create_table() -> None:
     """Render the page that allows administrators to define new tables."""
+    # Verificar permissão de criação de tabelas
+    username = st.session_state.get("username", "")
+    if not check_user_general_permission(username, "create_tables"):
+        st.error("Você não tem permissão para criar tabelas. Entre em contato com o administrador.")
+        return
+    
     st.header("Criar nova tabela")
     st.info(
         "Informe o nome da tabela e a quantidade de campos. Em seguida, defina o nome "
@@ -470,59 +554,109 @@ def page_create_table() -> None:
         except Exception as e:
             st.error(f"Erro ao criar a tabela: {e}")
             return
-        metadata.append({
+        # Salvar metadados no banco
+        table_metadata = {
             "name": table_name,
             "display_name": table_display_name,
             "fields": field_defs,
-            "created_by": st.session_state.username,
             "created_at": datetime.now().isoformat(),
-        })
-        save_tables_metadata(metadata)
-        st.success("Tabela criada com sucesso!")
+        }
+        
+        # Inserir metadados diretamente no banco
+        try:
+            with get_db_cursor() as cursor:
+                columns_json = json.dumps(field_defs)
+                cursor.execute("""
+                    INSERT INTO tables_metadata (table_name, display_name, columns, created_at)
+                    VALUES (%s, %s, %s, %s)
+                """, (table_name, table_display_name, columns_json, datetime.now()))
+                
+                st.success("Tabela criada com sucesso!")
+        except Exception as e:
+            st.error(f"Erro ao salvar metadados: {e}")
+            return
 
 
 def page_manage_tables() -> None:
     """Render the page for managing existing tables: viewing data, adding
     records, altering structure or deleting tables."""
     st.header("Gerenciar tabelas existentes")
+    
+    # Filtrar tabelas baseado nas permissões do usuário
+    username = st.session_state.get("username", "")
     metadata = load_tables_metadata()
-    if not metadata:
-        st.info("Nenhuma tabela foi criada ainda.")
+    filtered_metadata = filter_tables_by_permission(metadata, username)
+    
+    if not filtered_metadata:
+        st.info("Nenhuma tabela disponível para você ou nenhuma tabela foi criada ainda.")
         return
-    table_names = [t['display_name'] for t in metadata]
+    
+    # Mostrar tabelas disponíveis
+    table_names = [t['display_name'] for t in filtered_metadata]
     choice = st.selectbox("Selecione a tabela", options=table_names)
-    selected_meta = next((t for t in metadata if t['display_name'] == choice), None)
+    selected_meta = next((t for t in filtered_metadata if t['display_name'] == choice), None)
+    
     if selected_meta is None:
         st.error("Tabela não encontrada.")
         return
+    
+    # Verificar permissões para esta tabela específica
+    table_name = selected_meta['name']
+    can_view = check_user_permission(username, table_name, "view")
+    can_insert = check_user_permission(username, table_name, "insert")
+    can_update = check_user_permission(username, table_name, "update")
+    can_delete = check_user_permission(username, table_name, "delete")
+    
     # Show basic information about the table
     st.subheader(f"Tabela: {selected_meta['display_name']}")
     st.write("Campos:")
     fields_df = pd.DataFrame(selected_meta['fields'])
     st.table(fields_df)
-    # Subpage navigation
-    subpage = st.radio("O que você deseja fazer?", [
-        "Adicionar registro", 
-        "Carga em lote", 
-        "Visualizar dados", 
-        "Editar registro",
-        "Excluir registro",
-        "Adicionar campo", 
-        "Excluir tabela"
-    ])
-    if subpage == "Adicionar registro":
+    
+    # Mostrar permissões do usuário
+    if st.session_state.get("role") != "admin":
+        st.info(f"**Suas permissões para esta tabela:** Visualizar: {'✅' if can_view else '❌'}, Inserir: {'✅' if can_insert else '❌'}, Editar: {'✅' if can_update else '❌'}, Excluir: {'✅' if can_delete else '❌'}")
+    
+    # Subpage navigation baseada em permissões
+    available_options = []
+    
+    if can_insert:
+        available_options.append("Adicionar registro")
+        available_options.append("Carga em lote")
+    
+    if can_view:
+        available_options.append("Visualizar dados")
+    
+    if can_update:
+        available_options.append("Editar registro")
+        available_options.append("Adicionar campo")
+    
+    if can_delete:
+        available_options.append("Excluir registro")
+    
+    # Apenas admin pode excluir tabelas
+    if st.session_state.get("role") == "admin":
+        available_options.append("Excluir tabela")
+    
+    if not available_options:
+        st.warning("Você não tem permissões para realizar nenhuma operação nesta tabela.")
+        return
+    
+    subpage = st.radio("O que você deseja fazer?", available_options)
+    
+    if subpage == "Adicionar registro" and can_insert:
         add_record_form(selected_meta)
-    elif subpage == "Carga em lote":
+    elif subpage == "Carga em lote" and can_insert:
         batch_upload_form(selected_meta)
-    elif subpage == "Visualizar dados":
+    elif subpage == "Visualizar dados" and can_view:
         view_table_data(selected_meta)
-    elif subpage == "Editar registro":
+    elif subpage == "Editar registro" and can_update:
         edit_record_form(selected_meta)
-    elif subpage == "Excluir registro":
+    elif subpage == "Excluir registro" and can_delete:
         delete_record_form(selected_meta)
-    elif subpage == "Adicionar campo":
+    elif subpage == "Adicionar campo" and can_update:
         add_field_to_table(selected_meta)
-    elif subpage == "Excluir tabela":
+    elif subpage == "Excluir tabela" and st.session_state.get("role") == "admin":
         delete_table(selected_meta)
 
 
@@ -626,6 +760,12 @@ def batch_upload_form(table_meta: dict) -> None:
 
 def add_record_form(table_meta: dict) -> None:
     """Display a form to insert a new record into a table."""
+    # Verificar permissão de inserção
+    username = st.session_state.get("username", "")
+    if not check_user_permission(username, table_meta['name'], "insert"):
+        st.error("Você não tem permissão para inserir registros nesta tabela.")
+        return
+    
     st.subheader("Adicionar novo registro")
     with st.form(key=f"add_record_{table_meta['name']}"):
         input_values = {}
@@ -674,6 +814,12 @@ def add_record_form(table_meta: dict) -> None:
 
 def view_table_data(table_meta: dict) -> None:
     """Show the contents of a table in a data frame."""
+    # Verificar permissão de visualização
+    username = st.session_state.get("username", "")
+    if not check_user_permission(username, table_meta['name'], "view"):
+        st.error("Você não tem permissão para visualizar dados desta tabela.")
+        return
+    
     st.subheader("Visualizar dados")
     with get_db_connection() as conn:
         try:
@@ -727,6 +873,12 @@ def view_table_data(table_meta: dict) -> None:
 
 def add_field_to_table(table_meta: dict) -> None:
     """Render a form to add a new column to an existing table."""
+    # Verificar permissão de edição
+    username = st.session_state.get("username", "")
+    if not check_user_permission(username, table_meta['name'], "update"):
+        st.error("Você não tem permissão para modificar esta tabela.")
+        return
+    
     st.subheader("Adicionar novo campo à tabela")
     with st.form(key=f"add_field_{table_meta['name']}"):
         fname = st.text_input("Nome do novo campo")
@@ -752,15 +904,32 @@ def add_field_to_table(table_meta: dict) -> None:
             except Exception as e:
                 st.error(f"Erro ao adicionar coluna: {e}")
                 return
-            # Append to metadata and save
-            metadata = load_tables_metadata()
-            for t in metadata:
-                if t['name'] == table_meta['name']:
-                    t['fields'].append({"name": fname, "type": canonical_type})
-                    break
-            save_tables_metadata(metadata)
-            st.success("Campo adicionado com sucesso!")
-            st.experimental_rerun()
+            # Atualizar metadados no banco
+            try:
+                with get_db_cursor() as cursor:
+                    # Buscar campos atuais
+                    cursor.execute("SELECT columns FROM tables_metadata WHERE table_name = %s", (table_meta['name'],))
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        current_fields = result[0] or []
+                        current_fields.append({"name": fname, "type": canonical_type})
+                        
+                        # Atualizar campos no banco
+                        cursor.execute("""
+                            UPDATE tables_metadata 
+                            SET columns = %s, updated_at = CURRENT_TIMESTAMP
+                            WHERE table_name = %s
+                        """, (json.dumps(current_fields), table_meta['name']))
+                        
+                        st.success("Campo adicionado com sucesso!")
+                        st.experimental_rerun()
+                    else:
+                        st.error("Tabela não encontrada nos metadados")
+                        
+            except Exception as e:
+                st.error(f"Erro ao atualizar metadados: {e}")
+                return
 
 
 def delete_table(table_meta: dict) -> None:
@@ -773,12 +942,15 @@ def delete_table(table_meta: dict) -> None:
     if st.button("Confirmar exclusão"):
         try:
             drop_table(table_meta['name'])
-            # Remove metadata
-            metadata = load_tables_metadata()
-            metadata = [t for t in metadata if t['name'] != table_meta['name']]
-            save_tables_metadata(metadata)
-            st.success("Tabela excluída com sucesso!")
-            st.experimental_rerun()
+            # Remove metadata do banco
+            try:
+                with get_db_cursor() as cursor:
+                    cursor.execute("DELETE FROM tables_metadata WHERE table_name = %s", (table_meta['name'],))
+                    st.success("Tabela excluída com sucesso!")
+                    st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Erro ao remover metadados: {e}")
+                return
         except Exception as e:
             st.error(f"Erro ao excluir tabela: {e}")
 
@@ -822,47 +994,64 @@ def page_manage_users() -> None:
     if st.session_state.role != "admin":
         st.error("Acesso negado. Apenas administradores podem gerenciar usuários.")
         return
-    users = load_users()
-    st.subheader("Usuários cadastrados")
-    user_list = list(users.keys())
-    st.table(pd.DataFrame([
-        {"Usuário": u, "Perfil": users[u].get("role", "user")} for u in user_list
-    ]))
-    st.divider()
-    st.subheader("Adicionar novo usuário")
-    with st.form(key="add_user"):
-        new_username = st.text_input("Nome de usuário")
-        new_password = st.text_input("Senha", type="password")
-        confirm_password = st.text_input("Confirmar senha", type="password")
-        role = st.selectbox("Perfil", options=["user", "admin"])
-        submitted = st.form_submit_button("Adicionar usuário")
-        if submitted:
-            if not new_username or not new_password:
-                st.error("Usuário e senha são obrigatórios.")
-            elif new_password != confirm_password:
-                st.error("As senhas não conferem.")
-            elif new_username in users:
-                st.error("Usuário já existe.")
-            else:
-                users[new_username] = {
-                    "password": hash_password(new_password),
-                    "role": role,
-                }
-                save_users(users)
-                st.success("Usuário adicionado com sucesso!")
-                st.experimental_rerun()
-    st.divider()
-    st.subheader("Excluir usuário")
-    if len(users) > 1:
-        selected_user = st.selectbox("Selecione o usuário a excluir", options=[u for u in users if u != "admin"])
-        if st.button("Excluir usuário"):
-            if selected_user in users:
-                del users[selected_user]
-                save_users(users)
-                st.success("Usuário excluído com sucesso!")
-                st.experimental_rerun()
-    else:
-        st.info("Nenhum usuário removível.")
+    
+    # Tabs para diferentes funcionalidades
+    tab1, tab2, tab3, tab4 = st.tabs(["Usuários", "Permissões", "Permissões Gerais", "Adicionar Usuário"])
+    
+    with tab1:
+        st.subheader("Usuários cadastrados")
+        users = load_users()
+        user_list = list(users.keys())
+        user_df = pd.DataFrame([
+            {"Usuário": u, "Perfil": users[u].get("role", "user")} for u in user_list
+        ])
+        st.table(user_df)
+        
+        # Excluir usuário
+        st.divider()
+        st.subheader("Excluir usuário")
+        if len(users) > 1:
+            selected_user = st.selectbox("Selecione o usuário a excluir", options=[u for u in users if u != "admin"])
+            if st.button("Excluir usuário"):
+                if selected_user in users:
+                    del users[selected_user]
+                    save_users(users)
+                    st.success("Usuário excluído com sucesso!")
+                    st.experimental_rerun()
+        else:
+            st.info("Nenhum usuário removível.")
+    
+    with tab2:
+        st.subheader("Gerenciar permissões de usuários")
+        manage_user_permissions()
+    
+    with tab3:
+        st.subheader("Gerenciar permissões gerais dos usuários")
+        manage_user_general_permissions()
+    
+    with tab4:
+        st.subheader("Adicionar novo usuário")
+        with st.form(key="add_user"):
+            new_username = st.text_input("Nome de usuário")
+            new_password = st.text_input("Senha", type="password")
+            confirm_password = st.text_input("Confirmar senha", type="password")
+            role = st.selectbox("Perfil", options=["user", "admin"])
+            submitted = st.form_submit_button("Adicionar usuário")
+            if submitted:
+                if not new_username or not new_password:
+                    st.error("Usuário e senha são obrigatórios.")
+                elif new_password != confirm_password:
+                    st.error("As senhas não conferem.")
+                elif new_username in users:
+                    st.error("Usuário já existe.")
+                else:
+                    users[new_username] = {
+                        "password": hash_password(new_password),
+                        "role": role,
+                    }
+                    save_users(users)
+                    st.success("Usuário adicionado com sucesso!")
+                    st.experimental_rerun()
 
 
 def get_record_by_id(table_name: str, record_id: int) -> dict:
@@ -870,7 +1059,7 @@ def get_record_by_id(table_name: str, record_id: int) -> dict:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (record_id,))
+        cursor.execute(f"SELECT * FROM {table_name} WHERE id = %s", (record_id,))
         row = cursor.fetchone()
         if row:
             columns = [description[0] for description in cursor.description]
@@ -881,6 +1070,281 @@ def get_record_by_id(table_name: str, record_id: int) -> dict:
         return None
     finally:
         conn.close()
+
+
+def check_user_permission(username: str, table_name: str, permission: str) -> bool:
+    """Verifica se um usuário tem permissão específica para uma tabela."""
+    try:
+        with get_db_cursor() as cursor:
+            # Admin tem acesso total
+            if st.session_state.get("role") == "admin":
+                return True
+            
+            # Verificar permissão específica
+            cursor.execute("""
+                SELECT can_view, can_insert, can_update, can_delete 
+                FROM user_table_permissions utp
+                JOIN users u ON utp.user_id = u.id
+                WHERE u.username = %s AND utp.table_name = %s
+            """, (username, table_name))
+            
+            result = cursor.fetchone()
+            if result:
+                if permission == "view":
+                    return result[0]  # can_view
+                elif permission == "insert":
+                    return result[1]  # can_insert
+                elif permission == "update":
+                    return result[2]  # can_update
+                elif permission == "delete":
+                    return result[3]  # can_delete
+            
+            return False
+            
+    except Exception as e:
+        st.error(f"Erro ao verificar permissão: {e}")
+        return False
+
+
+def check_user_general_permission(username: str, permission: str) -> bool:
+    """Verifica se um usuário tem permissão geral específica."""
+    try:
+        with get_db_cursor() as cursor:
+            # Admin tem acesso total
+            if st.session_state.get("role") == "admin":
+                return True
+            
+            # Verificar permissão geral
+            cursor.execute("""
+                SELECT can_create_tables
+                FROM user_general_permissions ugp
+                JOIN users u ON ugp.user_id = u.id
+                WHERE u.username = %s
+            """, (username,))
+            
+            result = cursor.fetchone()
+            if result:
+                if permission == "create_tables":
+                    return result[0]  # can_create_tables
+            
+            return False
+            
+    except Exception as e:
+        st.error(f"Erro ao verificar permissão geral: {e}")
+        return False
+
+
+def get_user_accessible_tables(username: str) -> list:
+    """Retorna lista de tabelas que o usuário pode acessar."""
+    try:
+        with get_db_cursor() as cursor:
+            # Admin vê todas as tabelas
+            if st.session_state.get("role") == "admin":
+                cursor.execute("SELECT table_name FROM tables_metadata")
+                return [row[0] for row in cursor.fetchall()]
+            
+            # Usuário vê apenas tabelas com permissão
+            cursor.execute("""
+                SELECT DISTINCT utp.table_name 
+                FROM user_table_permissions utp
+                JOIN users u ON utp.user_id = u.id
+                WHERE u.username = %s AND utp.can_view = TRUE
+            """, (username,))
+            
+            return [row[0] for row in cursor.fetchall()]
+            
+    except Exception as e:
+        st.error(f"Erro ao buscar tabelas acessíveis: {e}")
+        return []
+
+
+def manage_user_permissions() -> None:
+    """Interface para gerenciar permissões de usuários."""
+    st.subheader("Gerenciar permissões de usuários")
+    
+    # Selecionar usuário
+    users = load_users()
+    user_options = [u for u in users.keys() if users[u].get("role") != "admin"]
+    
+    if not user_options:
+        st.info("Nenhum usuário não-admin encontrado para gerenciar permissões.")
+        return
+    
+    selected_user = st.selectbox("Selecione o usuário", options=user_options)
+    
+    if selected_user:
+        # Carregar tabelas disponíveis
+        metadata = load_tables_metadata()
+        if not metadata:
+            st.info("Nenhuma tabela encontrada.")
+            return
+        
+        st.write(f"**Configurando permissões para: {selected_user}**")
+        
+        # Formulário de permissões
+        with st.form(key=f"permissions_{selected_user}"):
+            st.write("**Permissões por tabela:**")
+            
+            permissions_data = []
+            for table_meta in metadata:
+                table_name = table_meta['name']
+                display_name = table_meta['display_name']
+                
+                col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+                
+                with col1:
+                    st.write(f"**{display_name}**")
+                
+                with col2:
+                    can_view = st.checkbox("Visualizar", key=f"view_{table_name}_{selected_user}")
+                
+                with col3:
+                    can_insert = st.checkbox("Inserir", key=f"insert_{table_name}_{selected_user}")
+                
+                with col4:
+                    can_update = st.checkbox("Editar", key=f"update_{table_name}_{selected_user}")
+                
+                with col5:
+                    can_delete = st.checkbox("Excluir", key=f"delete_{table_name}_{selected_user}")
+                
+                permissions_data.append({
+                    'table_name': table_name,
+                    'can_view': can_view,
+                    'can_insert': can_insert,
+                    'can_update': can_update,
+                    'can_delete': can_delete
+                })
+            
+            submitted = st.form_submit_button("Salvar permissões")
+            
+            if submitted:
+                save_user_permissions(selected_user, permissions_data)
+                st.success("Permissões salvas com sucesso!")
+                st.experimental_rerun()
+
+
+def save_user_permissions(username: str, permissions: list) -> None:
+    """Salva as permissões de um usuário no banco."""
+    try:
+        with get_db_cursor() as cursor:
+            # Obter ID do usuário
+            cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+            user_id = cursor.fetchone()[0]
+            
+            # Obter ID do admin que está concedendo as permissões
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.get("username", "admin"),))
+            admin_result = cursor.fetchone()
+            admin_id = admin_result[0] if admin_result else 1
+            
+            # Limpar permissões existentes
+            cursor.execute("DELETE FROM user_table_permissions WHERE user_id = %s", (user_id,))
+            
+            # Inserir novas permissões
+            for perm in permissions:
+                if any([perm['can_view'], perm['can_insert'], perm['can_update'], perm['can_delete']]):
+                    cursor.execute("""
+                        INSERT INTO user_table_permissions 
+                        (user_id, table_name, can_view, can_insert, can_update, can_delete, granted_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        user_id, perm['table_name'], 
+                        perm['can_view'], perm['can_insert'], 
+                        perm['can_update'], perm['can_delete'], 
+                        admin_id
+                    ))
+            
+            st.success(f"Permissões para {username} salvas com sucesso!")
+            
+    except Exception as e:
+        st.error(f"Erro ao salvar permissões: {e}")
+
+
+def save_user_general_permissions(username: str, can_create_tables: bool) -> None:
+    """Salva as permissões gerais de um usuário no banco."""
+    try:
+        with get_db_cursor() as cursor:
+            # Obter ID do usuário
+            cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+            user_id = cursor.fetchone()[0]
+            
+            # Obter ID do admin que está concedendo as permissões
+            cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.get("username", "admin"),))
+            admin_result = cursor.fetchone()
+            admin_id = admin_result[0] if admin_result else 1
+            
+            # Inserir ou atualizar permissões gerais
+            cursor.execute("""
+                INSERT INTO user_general_permissions (user_id, can_create_tables, granted_by)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id) 
+                DO UPDATE SET 
+                    can_create_tables = EXCLUDED.can_create_tables,
+                    granted_by = EXCLUDED.granted_by,
+                    granted_at = CURRENT_TIMESTAMP
+            """, (user_id, can_create_tables, admin_id))
+            
+            st.success(f"Permissões gerais para {username} salvas com sucesso!")
+            
+    except Exception as e:
+        st.error(f"Erro ao salvar permissões gerais: {e}")
+
+
+def manage_user_general_permissions() -> None:
+    """Interface para gerenciar permissões gerais dos usuários."""
+    st.subheader("Gerenciar permissões gerais dos usuários")
+    
+    # Selecionar usuário
+    users = load_users()
+    user_options = [u for u in users.keys() if users[u].get("role") != "admin"]
+    
+    if not user_options:
+        st.info("Nenhum usuário não-admin encontrado para gerenciar permissões.")
+        return
+    
+    selected_user = st.selectbox("Selecione o usuário", options=user_options, key="general_permissions_user")
+    
+    if selected_user:
+        # Carregar permissões atuais
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT ugp.can_create_tables
+                    FROM user_general_permissions ugp
+                    JOIN users u ON ugp.user_id = u.id
+                    WHERE u.username = %s
+                """, (selected_user,))
+                
+                result = cursor.fetchone()
+                current_can_create_tables = result[0] if result else False
+        except:
+            current_can_create_tables = False
+        
+        st.write(f"**Configurando permissões gerais para: {selected_user}**")
+        
+        # Formulário de permissões gerais
+        with st.form(key=f"general_permissions_{selected_user}"):
+            st.write("**Permissões gerais:**")
+            
+            can_create_tables = st.checkbox(
+                "Pode criar tabelas", 
+                value=current_can_create_tables,
+                key=f"can_create_tables_{selected_user}"
+            )
+            
+            submitted = st.form_submit_button("Salvar permissões gerais")
+            
+            if submitted:
+                save_user_general_permissions(selected_user, can_create_tables)
+                st.experimental_rerun()
+
+
+def filter_tables_by_permission(metadata: list, username: str) -> list:
+    """Filtra tabelas baseado nas permissões do usuário."""
+    if st.session_state.get("role") == "admin":
+        return metadata
+    
+    accessible_tables = get_user_accessible_tables(username)
+    return [table for table in metadata if table['name'] in accessible_tables]
 
 
 def update_record(table_name: str, record_id: int, values: dict) -> bool:
@@ -911,6 +1375,12 @@ def update_record(table_name: str, record_id: int, values: dict) -> bool:
 
 def edit_record_form(table_meta: dict) -> None:
     """Interface para edição de registros."""
+    # Verificar permissão de edição
+    username = st.session_state.get("username", "")
+    if not check_user_permission(username, table_meta['name'], "update"):
+        st.error("Você não tem permissão para editar registros desta tabela.")
+        return
+    
     st.subheader("Editar registro")
     
     # Buscar registros para seleção
@@ -1073,6 +1543,12 @@ def edit_record_form(table_meta: dict) -> None:
 
 def delete_record_form(table_meta: dict) -> None:
     """Interface para exclusão de registros."""
+    # Verificar permissão de exclusão
+    username = st.session_state.get("username", "")
+    if not check_user_permission(username, table_meta['name'], "delete"):
+        st.error("Você não tem permissão para excluir registros desta tabela.")
+        return
+    
     st.subheader("Excluir registro")
     
     with get_db_connection() as conn:
@@ -1191,10 +1667,17 @@ def main() -> None:
         st.session_state.role = None
         st.experimental_rerun()
     # Main menu
-    menu_options = ["Página Inicial", "Criar Tabela", "Gerenciar Tabelas", "Configurações"]
+    menu_options = ["Página Inicial", "Gerenciar Tabelas", "Configurações"]
+    
+    # Verificar permissão de criação de tabelas
+    username = st.session_state.get("username", "")
+    if check_user_general_permission(username, "create_tables"):
+        menu_options.insert(1, "Criar Tabela")
+    
     # Only show user management to admin
     if st.session_state.role == "admin":
         menu_options.append("Usuários")
+    
     selection = st.sidebar.selectbox("Menu", options=menu_options)
     if selection == "Página Inicial":
         st.title("Sistema de Cadastros Auxiliares")
