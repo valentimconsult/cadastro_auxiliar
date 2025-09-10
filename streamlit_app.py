@@ -45,15 +45,46 @@ def hash_password(password: str) -> str:
 
 
 def load_users() -> dict:
-    """Load the user database from the JSON file."""
-    with open(USERS_FILE, encoding="utf-8") as f:
-        return json.load(f)
+    """Load the user database from the PostgreSQL database."""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT username, password, role FROM users")
+            users = {}
+            for row in cursor.fetchall():
+                users[row['username']] = {
+                    'password': row['password'],
+                    'role': row['role']
+                }
+            return users
+    except Exception as e:
+        st.error(f"Erro ao carregar usuários do banco: {e}")
+        # Fallback para arquivo JSON se o banco falhar
+        try:
+            with open(USERS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
 
 
 def save_users(users: dict) -> None:
-    """Persist the user database back to disk."""
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2)
+    """Persist the user database to PostgreSQL database."""
+    try:
+        with get_db_cursor() as cursor:
+            for username, user_data in users.items():
+                cursor.execute("""
+                    INSERT INTO users (username, password, role)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (username) 
+                    DO UPDATE SET 
+                        password = EXCLUDED.password,
+                        role = EXCLUDED.role,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (username, user_data['password'], user_data['role']))
+    except Exception as e:
+        st.error(f"Erro ao salvar usuários no banco: {e}")
+        # Fallback para arquivo JSON se o banco falhar
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users, f, indent=2)
 
 
 def load_tables_metadata() -> list:
@@ -73,16 +104,13 @@ def load_tables_metadata() -> list:
                 # Converter JSONB para lista de campos
                 fields = []
                 if columns:
-                    # Se columns for string, fazer parse do JSON
-                    if isinstance(columns, str):
-                        try:
-                            columns = json.loads(columns)
-                        except json.JSONDecodeError as e:
-                            st.error(f"Erro ao fazer parse JSON da tabela {table_name}: {e}")
-                            continue
-                    
-                    # Agora columns deve ser uma lista
-                    if isinstance(columns, list):
+                    # PostgreSQL JSONB já vem como dict/list, não precisa fazer parse
+                    if isinstance(columns, (list, dict)):
+                        # Se for dict, converter para lista
+                        if isinstance(columns, dict):
+                            columns = [columns]
+                        
+                        # Processar lista de campos
                         for field in columns:
                             if isinstance(field, dict):
                                 fields.append({
@@ -90,11 +118,30 @@ def load_tables_metadata() -> list:
                                     'type': field.get('type', 'text')
                                 })
                             else:
-                                st.error(f"Campo invalido na tabela {table_name}: {field} (tipo: {type(field)})")
+                                st.warning(f"Campo invalido na tabela {table_name}: {field} (tipo: {type(field)})")
+                    elif isinstance(columns, str):
+                        # Se for string, tentar fazer parse do JSON
+                        try:
+                            columns_parsed = json.loads(columns)
+                            if isinstance(columns_parsed, list):
+                                for field in columns_parsed:
+                                    if isinstance(field, dict):
+                                        fields.append({
+                                            'name': field.get('name', ''),
+                                            'type': field.get('type', 'text')
+                                        })
+                            elif isinstance(columns_parsed, dict):
+                                fields.append({
+                                    'name': columns_parsed.get('name', ''),
+                                    'type': columns_parsed.get('type', 'text')
+                                })
+                        except json.JSONDecodeError as e:
+                            st.error(f"Erro ao fazer parse JSON da tabela {table_name}: {e}")
+                            continue
                     else:
-                        st.error(f"Formato invalido de campos na tabela {table_name}. Esperado: list, Recebido: {type(columns)}")
+                        st.warning(f"Formato invalido de campos na tabela {table_name}. Esperado: list/dict, Recebido: {type(columns)}")
                 else:
-                    st.warning(f"Tabela {table_name} nao tem campos definidos (columns = {columns})")
+                    st.warning(f"Tabela {table_name} nao tem campos definidos")
                 
                 metadata.append({
                     'name': table_name,
@@ -1022,7 +1069,6 @@ def page_manage_users() -> None:
             st.info("Nenhum usuário removível.")
     
     with tab2:
-        st.subheader("Gerenciar permissões de usuários")
         manage_user_permissions()
     
     with tab3:
@@ -1158,6 +1204,33 @@ def get_user_accessible_tables(username: str) -> list:
         return []
 
 
+def get_user_existing_permissions(username: str) -> dict:
+    """Retorna as permissões existentes de um usuário."""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT table_name, can_view, can_insert, can_update, can_delete
+                FROM user_table_permissions utp
+                JOIN users u ON utp.user_id = u.id
+                WHERE u.username = %s
+            """, (username,))
+            
+            permissions = {}
+            for row in cursor.fetchall():
+                permissions[row['table_name']] = {
+                    'can_view': row['can_view'],
+                    'can_insert': row['can_insert'],
+                    'can_update': row['can_update'],
+                    'can_delete': row['can_delete']
+                }
+            
+            return permissions
+            
+    except Exception as e:
+        st.error(f"Erro ao buscar permissões existentes: {e}")
+        return {}
+
+
 def manage_user_permissions() -> None:
     """Interface para gerenciar permissões de usuários."""
     st.subheader("Gerenciar permissões de usuários")
@@ -1181,6 +1254,9 @@ def manage_user_permissions() -> None:
         
         st.write(f"**Configurando permissões para: {selected_user}**")
         
+        # Carregar permissões existentes do usuário
+        existing_permissions = get_user_existing_permissions(selected_user)
+        
         # Formulário de permissões
         with st.form(key=f"permissions_{selected_user}"):
             st.write("**Permissões por tabela:**")
@@ -1190,22 +1266,38 @@ def manage_user_permissions() -> None:
                 table_name = table_meta['name']
                 display_name = table_meta['display_name']
                 
+                # Obter permissões existentes para esta tabela
+                existing_perm = existing_permissions.get(table_name, {
+                    'can_view': False,
+                    'can_insert': False,
+                    'can_update': False,
+                    'can_delete': False
+                })
+                
                 col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
                 
                 with col1:
                     st.write(f"**{display_name}**")
                 
                 with col2:
-                    can_view = st.checkbox("Visualizar", key=f"view_{table_name}_{selected_user}")
+                    can_view = st.checkbox("Visualizar", 
+                                        value=existing_perm['can_view'],
+                                        key=f"view_{table_name}_{selected_user}")
                 
                 with col3:
-                    can_insert = st.checkbox("Inserir", key=f"insert_{table_name}_{selected_user}")
+                    can_insert = st.checkbox("Inserir", 
+                                           value=existing_perm['can_insert'],
+                                           key=f"insert_{table_name}_{selected_user}")
                 
                 with col4:
-                    can_update = st.checkbox("Editar", key=f"update_{table_name}_{selected_user}")
+                    can_update = st.checkbox("Editar", 
+                                           value=existing_perm['can_update'],
+                                           key=f"update_{table_name}_{selected_user}")
                 
                 with col5:
-                    can_delete = st.checkbox("Excluir", key=f"delete_{table_name}_{selected_user}")
+                    can_delete = st.checkbox("Excluir", 
+                                           value=existing_perm['can_delete'],
+                                           key=f"delete_{table_name}_{selected_user}")
                 
                 permissions_data.append({
                     'table_name': table_name,
