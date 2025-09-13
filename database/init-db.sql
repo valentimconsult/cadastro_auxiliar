@@ -63,6 +63,10 @@ INSERT INTO users (username, password, role)
 VALUES ('admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'admin')
 ON CONFLICT (username) DO NOTHING;
 
+-- Criar usuario admin no PostgreSQL com privilégios de superusuário
+-- (Este comando será executado pelo grants_manager)
+-- CREATE USER admin WITH PASSWORD 'admin_password' SUPERUSER;
+
 -- Inserir configuracao padrao
 INSERT INTO config (key_name, value) 
 VALUES ('logo', '')

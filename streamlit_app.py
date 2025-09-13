@@ -9,31 +9,17 @@ import base64
 from PIL import Image
 import psycopg2
 from database.db_config import get_db_connection, get_db_cursor, db_config
+from database.grants_manager import grants_manager
 
 
 # Paths for configuration and data.  The app writes all of its state into
-# files next to the application code.  When running inside Docker these
-# will live in the container's filesystem; when running locally they'll
-# live in the project directory.  Creating the data directory if it
-# does not exist ensures the SQLite database has somewhere to live.
+# PostgreSQL database.  Configuration files are minimal and only for UI elements.
 DATA_DIR = "data"
-USERS_FILE = "users.json"
-TABLES_FILE = "tables.json"
 CONFIG_FILE = "config.json"
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Create the initial configuration files if they are missing.  A default
-# admin user is created with username "admin" and password "admin".
-if not os.path.exists(USERS_FILE):
-    default_admin_pwd = hashlib.sha256("admin".encode("utf-8")).hexdigest()
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"admin": {"password": default_admin_pwd, "role": "admin"}}, f, indent=2)
-
-if not os.path.exists(TABLES_FILE):
-    with open(TABLES_FILE, "w", encoding="utf-8") as f:
-        json.dump([], f)
-
+# Create the initial configuration file if it is missing.
 if not os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump({"logo": ""}, f)
@@ -58,19 +44,15 @@ def load_users() -> dict:
             return users
     except Exception as e:
         st.error(f"Erro ao carregar usuários do banco: {e}")
-        # Fallback para arquivo JSON se o banco falhar
-        try:
-            with open(USERS_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
+        return {}
 
 
 def save_users(users: dict) -> None:
-    """Persist the user database to PostgreSQL database."""
+    """Persist the user database to PostgreSQL database and create PostgreSQL users."""
     try:
         with get_db_cursor() as cursor:
             for username, user_data in users.items():
+                # Salvar no banco de dados da aplicação
                 cursor.execute("""
                     INSERT INTO users (username, password, role)
                     VALUES (%s, %s, %s)
@@ -80,11 +62,31 @@ def save_users(users: dict) -> None:
                         role = EXCLUDED.role,
                         updated_at = CURRENT_TIMESTAMP
                 """, (username, user_data['password'], user_data['role']))
+                
+                # Criar usuário no PostgreSQL com grants
+                try:
+                    # Gerar senha para o usuário PostgreSQL (usar hash da senha da aplicação)
+                    pg_password = user_data['password'][:20]  # Usar parte do hash como senha
+                    
+                    # Criar usuário no PostgreSQL
+                    grants_manager.create_database_user(
+                        username=username,
+                        password=pg_password,
+                        role=user_data['role']
+                    )
+                    
+                    # Aplicar permissões gerais
+                    grants_manager.grant_general_permissions(
+                        username=username,
+                        can_create_tables=(user_data['role'] == 'admin')
+                    )
+                    
+                except Exception as e:
+                    print(f"Aviso: Não foi possível criar usuário PostgreSQL para {username}: {e}")
+                    
     except Exception as e:
         st.error(f"Erro ao salvar usuários no banco: {e}")
-        # Fallback para arquivo JSON se o banco falhar
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users, f, indent=2)
+        raise
 
 
 def load_tables_metadata() -> list:
@@ -99,17 +101,18 @@ def load_tables_metadata() -> list:
             
             metadata = []
             for row in cursor.fetchall():
-                table_name, display_name, description, columns, created_at, updated_at = row
+                table_name = row['table_name']
+                display_name = row['display_name']
+                description = row['description']
+                columns = row['columns']
+                created_at = row['created_at']
+                updated_at = row['updated_at']
                 
                 # Converter JSONB para lista de campos
                 fields = []
                 if columns:
                     # PostgreSQL JSONB já vem como dict/list, não precisa fazer parse
-                    if isinstance(columns, (list, dict)):
-                        # Se for dict, converter para lista
-                        if isinstance(columns, dict):
-                            columns = [columns]
-                        
+                    if isinstance(columns, list):
                         # Processar lista de campos
                         for field in columns:
                             if isinstance(field, dict):
@@ -118,7 +121,13 @@ def load_tables_metadata() -> list:
                                     'type': field.get('type', 'text')
                                 })
                             else:
-                                st.warning(f"Campo invalido na tabela {table_name}: {field} (tipo: {type(field)})")
+                                print(f"Campo invalido na tabela {table_name}: {field} (tipo: {type(field)})")
+                    elif isinstance(columns, dict):
+                        # Se for dict único, converter para lista
+                        fields.append({
+                            'name': columns.get('name', ''),
+                            'type': columns.get('type', 'text')
+                        })
                     elif isinstance(columns, str):
                         # Se for string, tentar fazer parse do JSON
                         try:
@@ -136,12 +145,13 @@ def load_tables_metadata() -> list:
                                     'type': columns_parsed.get('type', 'text')
                                 })
                         except json.JSONDecodeError as e:
-                            st.error(f"Erro ao fazer parse JSON da tabela {table_name}: {e}")
+                            print(f"Erro ao fazer parse JSON da tabela {table_name}: {e}")
+                            # Se falhar no parse, pular esta tabela mas continuar
                             continue
                     else:
-                        st.warning(f"Formato invalido de campos na tabela {table_name}. Esperado: list/dict, Recebido: {type(columns)}")
+                        print(f"Formato invalido de campos na tabela {table_name}. Esperado: list/dict, Recebido: {type(columns)}")
                 else:
-                    st.warning(f"Tabela {table_name} nao tem campos definidos")
+                    print(f"Tabela {table_name} nao tem campos definidos")
                 
                 metadata.append({
                     'name': table_name,
@@ -155,7 +165,9 @@ def load_tables_metadata() -> list:
             return metadata
             
     except Exception as e:
-        st.error(f"Erro ao carregar metadados do banco: {e}")
+        print(f"Erro ao carregar metadados do banco: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -959,7 +971,7 @@ def add_field_to_table(table_meta: dict) -> None:
                     result = cursor.fetchone()
                     
                     if result:
-                        current_fields = result[0] or []
+                        current_fields = result['columns'] or []
                         current_fields.append({"name": fname, "type": canonical_type})
                         
                         # Atualizar campos no banco
@@ -1043,7 +1055,7 @@ def page_manage_users() -> None:
         return
     
     # Tabs para diferentes funcionalidades
-    tab1, tab2, tab3, tab4 = st.tabs(["Usuários", "Permissões", "Permissões Gerais", "Adicionar Usuário"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Usuários", "Permissões", "Permissões Gerais", "Adicionar Usuário", "PostgreSQL Grants"])
     
     with tab1:
         st.subheader("Usuários cadastrados")
@@ -1072,7 +1084,6 @@ def page_manage_users() -> None:
         manage_user_permissions()
     
     with tab3:
-        st.subheader("Gerenciar permissões gerais dos usuários")
         manage_user_general_permissions()
     
     with tab4:
@@ -1098,6 +1109,10 @@ def page_manage_users() -> None:
                     save_users(users)
                     st.success("Usuário adicionado com sucesso!")
                     st.experimental_rerun()
+    
+    with tab5:
+        st.subheader("Gerenciamento de Usuários PostgreSQL")
+        manage_postgresql_grants()
 
 
 def get_record_by_id(table_name: str, record_id: int) -> dict:
@@ -1137,13 +1152,13 @@ def check_user_permission(username: str, table_name: str, permission: str) -> bo
             result = cursor.fetchone()
             if result:
                 if permission == "view":
-                    return result[0]  # can_view
+                    return result['can_view']
                 elif permission == "insert":
-                    return result[1]  # can_insert
+                    return result['can_insert']
                 elif permission == "update":
-                    return result[2]  # can_update
+                    return result['can_update']
                 elif permission == "delete":
-                    return result[3]  # can_delete
+                    return result['can_delete']
             
             return False
             
@@ -1171,7 +1186,7 @@ def check_user_general_permission(username: str, permission: str) -> bool:
             result = cursor.fetchone()
             if result:
                 if permission == "create_tables":
-                    return result[0]  # can_create_tables
+                    return result['can_create_tables']
             
             return False
             
@@ -1187,7 +1202,7 @@ def get_user_accessible_tables(username: str) -> list:
             # Admin vê todas as tabelas
             if st.session_state.get("role") == "admin":
                 cursor.execute("SELECT table_name FROM tables_metadata")
-                return [row[0] for row in cursor.fetchall()]
+                return [row['table_name'] for row in cursor.fetchall()]
             
             # Usuário vê apenas tabelas com permissão
             cursor.execute("""
@@ -1197,7 +1212,7 @@ def get_user_accessible_tables(username: str) -> list:
                 WHERE u.username = %s AND utp.can_view = TRUE
             """, (username,))
             
-            return [row[0] for row in cursor.fetchall()]
+            return [row['table_name'] for row in cursor.fetchall()]
             
     except Exception as e:
         st.error(f"Erro ao buscar tabelas acessíveis: {e}")
@@ -1233,7 +1248,7 @@ def get_user_existing_permissions(username: str) -> dict:
 
 def manage_user_permissions() -> None:
     """Interface para gerenciar permissões de usuários."""
-    st.subheader("Gerenciar permissões de usuários")
+    #st.subheader("Gerenciar permissões de usuários")
     
     # Selecionar usuário
     users = load_users()
@@ -1316,24 +1331,30 @@ def manage_user_permissions() -> None:
 
 
 def save_user_permissions(username: str, permissions: list) -> None:
-    """Salva as permissões de um usuário no banco."""
+    """Salva as permissões de um usuário no banco e aplica grants no PostgreSQL."""
     try:
         with get_db_cursor() as cursor:
             # Obter ID do usuário
             cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
-            user_id = cursor.fetchone()[0]
+            user_result = cursor.fetchone()
+            user_id = user_result['id'] if user_result else None
+            
+            if not user_id:
+                st.error(f"Usuário {username} não encontrado!")
+                return
             
             # Obter ID do admin que está concedendo as permissões
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.get("username", "admin"),))
             admin_result = cursor.fetchone()
-            admin_id = admin_result[0] if admin_result else 1
+            admin_id = admin_result['id'] if admin_result else 1
             
             # Limpar permissões existentes
             cursor.execute("DELETE FROM user_table_permissions WHERE user_id = %s", (user_id,))
             
-            # Inserir novas permissões
+            # Inserir novas permissões e aplicar grants
             for perm in permissions:
                 if any([perm['can_view'], perm['can_insert'], perm['can_update'], perm['can_delete']]):
+                    # Salvar na tabela de permissões da aplicação
                     cursor.execute("""
                         INSERT INTO user_table_permissions 
                         (user_id, table_name, can_view, can_insert, can_update, can_delete, granted_by)
@@ -1344,6 +1365,21 @@ def save_user_permissions(username: str, permissions: list) -> None:
                         perm['can_update'], perm['can_delete'], 
                         admin_id
                     ))
+                    
+                    # Aplicar grants no PostgreSQL
+                    try:
+                        grants_manager.grant_table_permissions(
+                            username=username,
+                            table_name=perm['table_name'],
+                            permissions={
+                                'can_view': perm['can_view'],
+                                'can_insert': perm['can_insert'],
+                                'can_update': perm['can_update'],
+                                'can_delete': perm['can_delete']
+                            }
+                        )
+                    except Exception as e:
+                        print(f"Aviso: Não foi possível aplicar grants para {username} na tabela {perm['table_name']}: {e}")
             
             st.success(f"Permissões para {username} salvas com sucesso!")
             
@@ -1352,17 +1388,22 @@ def save_user_permissions(username: str, permissions: list) -> None:
 
 
 def save_user_general_permissions(username: str, can_create_tables: bool) -> None:
-    """Salva as permissões gerais de um usuário no banco."""
+    """Salva as permissões gerais de um usuário no banco e aplica grants no PostgreSQL."""
     try:
         with get_db_cursor() as cursor:
             # Obter ID do usuário
             cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
-            user_id = cursor.fetchone()[0]
+            user_result = cursor.fetchone()
+            user_id = user_result['id'] if user_result else None
+            
+            if not user_id:
+                st.error(f"Usuário {username} não encontrado!")
+                return
             
             # Obter ID do admin que está concedendo as permissões
             cursor.execute("SELECT id FROM users WHERE username = %s", (st.session_state.get("username", "admin"),))
             admin_result = cursor.fetchone()
-            admin_id = admin_result[0] if admin_result else 1
+            admin_id = admin_result['id'] if admin_result else 1
             
             # Inserir ou atualizar permissões gerais
             cursor.execute("""
@@ -1375,6 +1416,15 @@ def save_user_general_permissions(username: str, can_create_tables: bool) -> Non
                     granted_at = CURRENT_TIMESTAMP
             """, (user_id, can_create_tables, admin_id))
             
+            # Aplicar grants no PostgreSQL
+            try:
+                grants_manager.grant_general_permissions(
+                    username=username,
+                    can_create_tables=can_create_tables
+                )
+            except Exception as e:
+                print(f"Aviso: Não foi possível aplicar grants gerais para {username}: {e}")
+            
             st.success(f"Permissões gerais para {username} salvas com sucesso!")
             
     except Exception as e:
@@ -1383,7 +1433,6 @@ def save_user_general_permissions(username: str, can_create_tables: bool) -> Non
 
 def manage_user_general_permissions() -> None:
     """Interface para gerenciar permissões gerais dos usuários."""
-    st.subheader("Gerenciar permissões gerais dos usuários")
     
     # Selecionar usuário
     users = load_users()
@@ -1407,7 +1456,7 @@ def manage_user_general_permissions() -> None:
                 """, (selected_user,))
                 
                 result = cursor.fetchone()
-                current_can_create_tables = result[0] if result else False
+                current_can_create_tables = result['can_create_tables'] if result else False
         except:
             current_can_create_tables = False
         
@@ -1437,6 +1486,132 @@ def filter_tables_by_permission(metadata: list, username: str) -> list:
     
     accessible_tables = get_user_accessible_tables(username)
     return [table for table in metadata if table['name'] in accessible_tables]
+
+
+def manage_postgresql_grants() -> None:
+    """Interface para gerenciar usuários e grants do PostgreSQL."""
+    st.write("**Gerenciamento de usuários e permissões no PostgreSQL**")
+    
+    # Selecionar usuário
+    users = load_users()
+    user_options = list(users.keys())
+    
+    if not user_options:
+        st.info("Nenhum usuário encontrado.")
+        return
+    
+    selected_user = st.selectbox("Selecione o usuário", options=user_options)
+    
+    if selected_user:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"**Usuário selecionado: {selected_user}**")
+            
+            # Testar conexão do usuário
+            if st.button("Testar Conexão PostgreSQL"):
+                try:
+                    user_data = users[selected_user]
+                    pg_password = user_data['password'][:20]
+                    
+                    if grants_manager.test_user_connection(selected_user, pg_password):
+                        st.success("✅ Conexão PostgreSQL funcionando!")
+                    else:
+                        st.error("❌ Falha na conexão PostgreSQL")
+                except Exception as e:
+                    st.error(f"Erro ao testar conexão: {e}")
+            
+            # Recriar usuário no PostgreSQL
+            if st.button("Recriar Usuário PostgreSQL"):
+                try:
+                    user_data = users[selected_user]
+                    pg_password = user_data['password'][:20]
+                    
+                    # Remover usuário existente primeiro
+                    grants_manager.drop_user(selected_user)
+                    
+                    # Criar novo usuário
+                    if grants_manager.create_database_user(
+                        username=selected_user,
+                        password=pg_password,
+                        role=user_data['role']
+                    ):
+                        st.success("✅ Usuário PostgreSQL recriado com sucesso!")
+                    else:
+                        st.error("❌ Falha ao recriar usuário PostgreSQL")
+                except Exception as e:
+                    st.error(f"Erro ao recriar usuário: {e}")
+        
+        with col2:
+            st.write("**Ações de Grants**")
+            
+            # Aplicar todas as permissões salvas
+            if st.button("Aplicar Todas as Permissões"):
+                try:
+                    # Aplicar permissões gerais
+                    with get_db_cursor() as cursor:
+                        cursor.execute("""
+                            SELECT can_create_tables
+                            FROM user_general_permissions ugp
+                            JOIN users u ON ugp.user_id = u.id
+                            WHERE u.username = %s
+                        """, (selected_user,))
+                        result = cursor.fetchone()
+                        can_create = result['can_create_tables'] if result else False
+                    
+                    grants_manager.grant_general_permissions(selected_user, can_create)
+                    
+                    # Aplicar permissões de tabelas
+                    with get_db_cursor() as cursor:
+                        cursor.execute("""
+                            SELECT table_name, can_view, can_insert, can_update, can_delete
+                            FROM user_table_permissions utp
+                            JOIN users u ON utp.user_id = u.id
+                            WHERE u.username = %s
+                        """, (selected_user,))
+                        permissions = cursor.fetchall()
+                    
+                    for perm in permissions:
+                        grants_manager.grant_table_permissions(
+                            username=selected_user,
+                            table_name=perm['table_name'],
+                            permissions={
+                                'can_view': perm['can_view'],
+                                'can_insert': perm['can_insert'],
+                                'can_update': perm['can_update'],
+                                'can_delete': perm['can_delete']
+                            }
+                        )
+                    
+                    st.success("✅ Todas as permissões aplicadas com sucesso!")
+                    
+                except Exception as e:
+                    st.error(f"Erro ao aplicar permissões: {e}")
+            
+            # Revogar todas as permissões
+            if st.button("Revogar Todas as Permissões"):
+                try:
+                    grants_manager.revoke_all_permissions(selected_user)
+                    st.success("✅ Todas as permissões revogadas!")
+                except Exception as e:
+                    st.error(f"Erro ao revogar permissões: {e}")
+        
+        # Mostrar permissões atuais
+        st.write("**Permissões Atuais no PostgreSQL:**")
+        try:
+            permissions = grants_manager.get_user_permissions(selected_user)
+            if permissions:
+                st.write("**Permissões de Tabelas:**")
+                for perm in permissions['table_permissions']:
+                    st.write(f"- {perm[1]}.{perm[2]}: {perm[3]}")
+                
+                st.write("**Permissões de Schema:**")
+                for perm in permissions['schema_permissions']:
+                    st.write(f"- {perm[0]}: {perm[1]}")
+            else:
+                st.info("Nenhuma permissão encontrada ou erro ao buscar.")
+        except Exception as e:
+            st.error(f"Erro ao buscar permissões: {e}")
 
 
 def update_record(table_name: str, record_id: int, values: dict) -> bool:
