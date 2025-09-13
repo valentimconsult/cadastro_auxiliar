@@ -171,6 +171,116 @@ def load_tables_metadata() -> list:
         return []
 
 
+def refresh_table_metadata(table_name: str) -> dict:
+    """Recarrega os metadados de uma tabela específica do banco."""
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT table_name, display_name, description, columns, created_at, updated_at
+                FROM tables_metadata
+                WHERE table_name = %s
+            """, (table_name,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+                
+            # Converter JSONB para lista de campos
+            fields = []
+            columns = row['columns']
+            if columns and isinstance(columns, list):
+                for field in columns:
+                    if isinstance(field, dict):
+                        fields.append({
+                            'name': field.get('name', ''),
+                            'type': field.get('type', 'text')
+                        })
+            
+            return {
+                'name': row['table_name'],
+                'display_name': row['display_name'] or row['table_name'],
+                'description': row['description'],
+                'fields': fields,
+                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                'updated_at': row['updated_at'].isoformat() if row['updated_at'] else None
+            }
+            
+    except Exception as e:
+        print(f"Erro ao recarregar metadados da tabela {table_name}: {e}")
+        return None
+
+
+def sync_table_structure_with_metadata(table_name: str) -> bool:
+    """Sincroniza a estrutura real da tabela com os metadados automaticamente."""
+    try:
+        with get_db_cursor() as cursor:
+            # Buscar colunas reais da tabela
+            cursor.execute("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = %s AND column_name != 'id'
+                ORDER BY ordinal_position
+            """, (table_name,))
+            
+            real_columns = cursor.fetchall()
+            
+            # Buscar metadados atuais
+            cursor.execute("SELECT columns FROM tables_metadata WHERE table_name = %s", (table_name,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return False
+                
+            current_fields = result['columns'] or []
+            current_field_names = [f['name'] for f in current_fields]
+            
+            # Mapear tipos de dados
+            type_mapping = {
+                'text': 'text',
+                'character varying': 'text',
+                'varchar': 'text',
+                'integer': 'int',
+                'bigint': 'int',
+                'real': 'float',
+                'double precision': 'float',
+                'numeric': 'float',
+                'date': 'date',
+                'timestamp': 'date',
+                'boolean': 'bool'
+            }
+            
+            # Verificar se há colunas novas na tabela que não estão nos metadados
+            updated = False
+            for col in real_columns:
+                col_name = col['column_name']
+                col_type = type_mapping.get(col['data_type'], 'text')
+                
+                if col_name not in current_field_names:
+                    # Adicionar nova coluna aos metadados
+                    current_fields.append({
+                        'name': col_name,
+                        'type': col_type
+                    })
+                    updated = True
+                    print(f"Coluna {col_name} adicionada aos metadados automaticamente")
+            
+            # Atualizar metadados se houve mudanças
+            if updated:
+                cursor.execute("""
+                    UPDATE tables_metadata 
+                    SET columns = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE table_name = %s
+                """, (json.dumps(current_fields), table_name))
+                print(f"Metadados da tabela {table_name} sincronizados com sucesso")
+                return True
+                
+            return False
+            
+    except Exception as e:
+        print(f"Erro ao sincronizar estrutura da tabela {table_name}: {e}")
+        return False
+
+
 def save_tables_metadata(metadata: list) -> None:
     """Save the table definitions to the database."""
     try:
@@ -650,10 +760,32 @@ def page_manage_tables() -> None:
         st.info("Nenhuma tabela disponível para você ou nenhuma tabela foi criada ainda.")
         return
     
-    # Mostrar tabelas disponíveis
-    table_names = [t['display_name'] for t in filtered_metadata]
-    choice = st.selectbox("Selecione a tabela", options=table_names)
+    # Botão de refresh manual
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        table_names = [t['display_name'] for t in filtered_metadata]
+        choice = st.selectbox("Selecione a tabela", options=table_names, key="table_selector")
+    with col2:
+        if st.button("🔄 Atualizar", help="Recarregar metadados da tabela", key="refresh_metadata"):
+            # Sincronizar estrutura da tabela com metadados
+            if selected_meta:
+                sync_table_structure_with_metadata(selected_meta['name'])
+            
+            # Forçar refresh dos metadados
+            st.cache_data.clear()
+            st.experimental_rerun()
+    
     selected_meta = next((t for t in filtered_metadata if t['display_name'] == choice), None)
+    
+    # Se uma tabela foi selecionada, sincronizar e recarregar metadados
+    if selected_meta:
+        # Sincronizar estrutura da tabela com metadados
+        sync_table_structure_with_metadata(selected_meta['name'])
+        
+        # Recarregar metadados atualizados
+        refreshed_meta = refresh_table_metadata(selected_meta['name'])
+        if refreshed_meta:
+            selected_meta = refreshed_meta
     
     if selected_meta is None:
         st.error("Tabela não encontrada.")
@@ -701,7 +833,9 @@ def page_manage_tables() -> None:
         st.warning("Você não tem permissões para realizar nenhuma operação nesta tabela.")
         return
     
-    subpage = st.radio("O que você deseja fazer?", available_options)
+    # Usar chave única para manter estado do modo selecionado
+    subpage_key = f"subpage_{table_name}"
+    subpage = st.radio("O que você deseja fazer?", available_options, key=subpage_key)
     
     if subpage == "Adicionar registro" and can_insert:
         add_record_form(selected_meta)
@@ -825,6 +959,11 @@ def add_record_form(table_meta: dict) -> None:
         st.error("Você não tem permissão para inserir registros nesta tabela.")
         return
     
+    # Recarregar metadados para garantir dados atualizados
+    refreshed_meta = refresh_table_metadata(table_meta['name'])
+    if refreshed_meta:
+        table_meta = refreshed_meta
+    
     st.subheader("Adicionar novo registro")
     with st.form(key=f"add_record_{table_meta['name']}"):
         input_values = {}
@@ -878,6 +1017,11 @@ def view_table_data(table_meta: dict) -> None:
     if not check_user_permission(username, table_meta['name'], "view"):
         st.error("Você não tem permissão para visualizar dados desta tabela.")
         return
+    
+    # Recarregar metadados para garantir dados atualizados
+    refreshed_meta = refresh_table_metadata(table_meta['name'])
+    if refreshed_meta:
+        table_meta = refreshed_meta
     
     st.subheader("Visualizar dados")
     with get_db_connection() as conn:
@@ -960,34 +1104,24 @@ def add_field_to_table(table_meta: dict) -> None:
             # Update database and metadata
             try:
                 alter_table_add_column(table_meta['name'], {"name": fname, "type": canonical_type})
+                
+                # Sincronizar automaticamente os metadados com a estrutura da tabela
+                if sync_table_structure_with_metadata(table_meta['name']):
+                    st.success("Campo adicionado e metadados sincronizados com sucesso!")
+                else:
+                    st.success("Campo adicionado com sucesso!")
+                
+                st.info("🔄 Atualizando interface...")
+                
+                # Limpar cache do Streamlit para forçar refresh
+                if hasattr(st, 'cache_data'):
+                    st.cache_data.clear()
+                
+                # Forçar refresh da página mantendo o modo selecionado
+                st.experimental_rerun()
+                
             except Exception as e:
                 st.error(f"Erro ao adicionar coluna: {e}")
-                return
-            # Atualizar metadados no banco
-            try:
-                with get_db_cursor() as cursor:
-                    # Buscar campos atuais
-                    cursor.execute("SELECT columns FROM tables_metadata WHERE table_name = %s", (table_meta['name'],))
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        current_fields = result['columns'] or []
-                        current_fields.append({"name": fname, "type": canonical_type})
-                        
-                        # Atualizar campos no banco
-                        cursor.execute("""
-                            UPDATE tables_metadata 
-                            SET columns = %s, updated_at = CURRENT_TIMESTAMP
-                            WHERE table_name = %s
-                        """, (json.dumps(current_fields), table_meta['name']))
-                        
-                        st.success("Campo adicionado com sucesso!")
-                        st.experimental_rerun()
-                    else:
-                        st.error("Tabela não encontrada nos metadados")
-                        
-            except Exception as e:
-                st.error(f"Erro ao atualizar metadados: {e}")
                 return
 
 
@@ -1647,6 +1781,11 @@ def edit_record_form(table_meta: dict) -> None:
     if not check_user_permission(username, table_meta['name'], "update"):
         st.error("Você não tem permissão para editar registros desta tabela.")
         return
+    
+    # Recarregar metadados para garantir dados atualizados
+    refreshed_meta = refresh_table_metadata(table_meta['name'])
+    if refreshed_meta:
+        table_meta = refreshed_meta
     
     st.subheader("Editar registro")
     
