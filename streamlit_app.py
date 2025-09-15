@@ -428,7 +428,7 @@ def insert_record(table_name: str, fields: list, values: dict) -> None:
 
 
 def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
-    """Insert multiple records into the specified table with duplicate checking.
+    """Insert multiple records into the specified table with duplicate checking using PostgreSQL.
     
     Returns a tuple (inserted_count, duplicate_count, errors)
     """
@@ -436,17 +436,7 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
     duplicate_count = 0
     errors = []
     
-    # Get existing records for duplicate checking
-    existing_records = set()
-    try:
-        with get_db_cursor() as cursor:
-            cursor.execute(f"SELECT * FROM {table_name}")
-            for row in cursor.fetchall():
-                # Convert Row object to list and create tuple (excluding id) for comparison
-                row_values = list(row.values())
-                existing_records.add(tuple(row_values[1:]))  # Skip id column
-    except Exception as e:
-        errors.append(f"Erro ao verificar registros existentes: {e}")
+    if not records:
         return 0, 0, errors
     
     # Build column names
@@ -456,42 +446,82 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
         sql_name = sanitize_identifier(fname)
         column_names.append(sql_name)
     
-    # Prepare SQL statement
-    placeholders = ["%s"] * len(column_names)
-    sql = f"INSERT INTO {table_name} ({', '.join(column_names)}) VALUES ({', '.join(placeholders)})"
-    
-    for i, record in enumerate(records):
-        try:
-            # Prepare values for this record
-            value_list = []
-            for field in fields:
-                fname = field['name']
-                value = record.get(fname)
-                
-                # Convert data types
-                if field['type'] == 'int':
-                    value = int(value) if value else None
-                elif field['type'] == 'float':
-                    value = float(value) if value else None
-                elif field['type'] == 'bool':
-                    value = True if value in ['True', 'true', '1', 1] else False
-                
-                value_list.append(value)
+    try:
+        with get_db_cursor() as cursor:
+            # Usar UPSERT do PostgreSQL para verificar duplicatas de forma eficiente
+            # Criar uma tabela temporária para os novos dados
+            temp_table = f"temp_import_{table_name}_{hash(str(records)) % 10000}"
             
-            # Check for duplicates
-            record_tuple = tuple(value_list)
-            if record_tuple in existing_records:
-                duplicate_count += 1
-                continue
+            # Criar tabela temporária com a mesma estrutura
+            create_temp_sql = f"""
+                CREATE TEMP TABLE {temp_table} (
+                    {', '.join([f"{col} TEXT" for col in column_names])}
+                )
+            """
+            cursor.execute(create_temp_sql)
             
-            # Insert record
-            with get_db_cursor() as cursor:
-                cursor.execute(sql, value_list)
-            inserted_count += 1
-            existing_records.add(record_tuple)
+            # Inserir dados na tabela temporária
+            placeholders = ["%s"] * len(column_names)
+            insert_temp_sql = f"INSERT INTO {temp_table} ({', '.join(column_names)}) VALUES ({', '.join(placeholders)})"
             
-        except Exception as e:
-            errors.append(f"Erro na linha {i+1}: {e}")
+            for i, record in enumerate(records):
+                try:
+                    # Prepare values for this record
+                    value_list = []
+                    for field in fields:
+                        fname = field['name']
+                        value = record.get(fname)
+                        
+                        # Convert data types
+                        if field['type'] == 'int':
+                            value = int(value) if value else None
+                        elif field['type'] == 'float':
+                            value = float(value) if value else None
+                        elif field['type'] == 'bool':
+                            value = True if value in ['True', 'true', '1', 1] else False
+                        
+                        # Converter para string para a tabela temporária
+                        value_list.append(str(value) if value is not None else None)
+                    
+                    cursor.execute(insert_temp_sql, value_list)
+                    
+                except Exception as e:
+                    errors.append(f"Erro na linha {i+1}: {e}")
+            
+            # Verificar duplicatas usando JOIN
+            # Construir condição de JOIN baseada nas colunas (excluindo ID)
+            join_conditions = []
+            for col in column_names:
+                join_conditions.append(f"t.{col} = temp.{col}")
+            
+            # Contar duplicatas
+            count_duplicates_sql = f"""
+                SELECT COUNT(*) as duplicate_count
+                FROM {temp_table} temp
+                INNER JOIN {table_name} t ON {' AND '.join(join_conditions)}
+            """
+            cursor.execute(count_duplicates_sql)
+            duplicate_count = cursor.fetchone()['duplicate_count']
+            
+            # Inserir apenas registros não duplicados
+            insert_new_sql = f"""
+                INSERT INTO {table_name} ({', '.join(column_names)})
+                SELECT {', '.join(column_names)}
+                FROM {temp_table} temp
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {table_name} t 
+                    WHERE {' AND '.join(join_conditions)}
+                )
+            """
+            cursor.execute(insert_new_sql)
+            inserted_count = cursor.rowcount
+            
+            # Limpar tabela temporária
+            cursor.execute(f"DROP TABLE {temp_table}")
+            
+    except Exception as e:
+        errors.append(f"Erro ao processar importação: {e}")
+        return 0, 0, errors
     
     return inserted_count, duplicate_count, errors
 
@@ -1025,54 +1055,66 @@ def view_table_data(table_meta: dict) -> None:
         table_meta = refreshed_meta
     
     st.subheader("Visualizar dados")
-    with get_db_connection() as conn:
-        try:
-            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
+    try:
+        # Usar cursor para evitar problemas de compatibilidade com pandas
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_meta['name']}")
+            rows = cursor.fetchall()
             
-            # Show statistics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total de registros", len(df))
-            with col2:
-                st.metric("Colunas", len(df.columns))
-            with col3:
-                if len(df) > 0:
-                    # Check for potential duplicates (excluding ID)
-                    data_cols = [col for col in df.columns if col != 'id']
-                    if data_cols:
-                        duplicates = df.duplicated(subset=data_cols).sum()
-                        st.metric("Possíveis duplicados", duplicates)
-                    else:
-                        st.metric("Possíveis duplicados", 0)
+            # Converter para DataFrame manualmente
+            if rows:
+                # Converter Row objects para dicionários
+                data = []
+                for row in rows:
+                    data.append(dict(row))
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame()
+        
+        # Show statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de registros", len(df))
+        with col2:
+            st.metric("Colunas", len(df.columns))
+        with col3:
+            if len(df) > 0:
+                # Check for potential duplicates (excluding ID)
+                data_cols = [col for col in df.columns if col != 'id']
+                if data_cols:
+                    duplicates = df.duplicated(subset=data_cols).sum()
+                    st.metric("Possíveis duplicados", duplicates)
                 else:
                     st.metric("Possíveis duplicados", 0)
+            else:
+                st.metric("Possíveis duplicados", 0)
+        
+        # Show data
+        st.write("**Dados da tabela:**")
+        st.dataframe(df)
+        
+        # Provide option to download as CSV
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Baixar CSV",
+            data=csv,
+            file_name=f"{table_meta['name']}.csv",
+            mime="text/csv"
+        )
+        
+        # Show data quality info
+        if len(df) > 0:
+            st.write("**Qualidade dos dados:**")
+            quality_df = pd.DataFrame({
+                'Coluna': df.columns,
+                'Tipo': df.dtypes,
+                'Valores únicos': [df[col].nunique() for col in df.columns],
+                'Valores nulos': df.isnull().sum().values
+            })
+            st.dataframe(quality_df)
             
-            # Show data
-            st.write("**Dados da tabela:**")
-            st.dataframe(df)
-            
-            # Provide option to download as CSV
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Baixar CSV",
-                data=csv,
-                file_name=f"{table_meta['name']}.csv",
-                mime="text/csv"
-            )
-            
-            # Show data quality info
-            if len(df) > 0:
-                st.write("**Qualidade dos dados:**")
-                quality_df = pd.DataFrame({
-                    'Coluna': df.columns,
-                    'Tipo': df.dtypes,
-                    'Valores únicos': [df[col].nunique() for col in df.columns],
-                    'Valores nulos': df.isnull().sum().values
-                })
-                st.dataframe(quality_df)
-                
-        except Exception as e:
-            st.error(f"Erro ao ler dados: {e}")
+    except Exception as e:
+        st.error(f"Erro ao ler dados: {e}")
 
 
 def add_field_to_table(table_meta: dict) -> None:
@@ -1791,9 +1833,19 @@ def edit_record_form(table_meta: dict) -> None:
     st.subheader("Editar registro")
     
     # Buscar registros para seleção
-    with get_db_connection() as conn:
-        try:
-            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_meta['name']}")
+            rows = cursor.fetchall()
+            
+            # Converter para DataFrame manualmente
+            if rows:
+                data = []
+                for row in rows:
+                    data.append(dict(row))
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame()
             
             if len(df) == 0:
                 st.warning("Nenhum registro encontrado para editar.")
@@ -1943,9 +1995,9 @@ def edit_record_form(table_meta: dict) -> None:
                 if not fields_to_edit:
                     st.info("Selecione pelo menos um campo para editar.")
                         
-        except Exception as e:
-            st.error(f"Erro ao carregar dados para edição: {e}")
-            st.info("Tente recarregar a página ou verificar se a tabela existe.")
+    except Exception as e:
+        st.error(f"Erro ao carregar dados para edição: {e}")
+        st.info("Tente recarregar a página ou verificar se a tabela existe.")
 
 
 def delete_record_form(table_meta: dict) -> None:
@@ -1958,9 +2010,19 @@ def delete_record_form(table_meta: dict) -> None:
     
     st.subheader("Excluir registro")
     
-    with get_db_connection() as conn:
-        try:
-            df = pd.read_sql_query(f"SELECT * FROM {table_meta['name']}", conn)
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {table_meta['name']}")
+            rows = cursor.fetchall()
+            
+            # Converter para DataFrame manualmente
+            if rows:
+                data = []
+                for row in rows:
+                    data.append(dict(row))
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame()
             
             if len(df) == 0:
                 st.warning("Nenhum registro encontrado para excluir.")
@@ -2047,8 +2109,8 @@ def delete_record_form(table_meta: dict) -> None:
                         st.info("Exclusão cancelada.")
                         st.experimental_rerun()
                         
-        except Exception as e:
-            st.error(f"Erro ao carregar dados para exclusão: {e}")
+    except Exception as e:
+        st.error(f"Erro ao carregar dados para exclusão: {e}")
 
 
 def main() -> None:
