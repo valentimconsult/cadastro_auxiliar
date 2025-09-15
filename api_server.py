@@ -13,9 +13,6 @@ CORS(app)  # Permitir CORS para acesso externo
 
 # Configuracao
 DATA_DIR = "data"
-DB_PATH = os.path.join(DATA_DIR, "data.db")
-USERS_FILE = "users.json"
-TABLES_FILE = "tables.json"
 
 def get_db_connection():
     """Retorna conexao com o banco PostgreSQL."""
@@ -23,28 +20,91 @@ def get_db_connection():
     return pg_get_connection()
 
 def load_tables_metadata():
-    """Carrega metadados das tabelas."""
+    """Carrega metadados das tabelas do banco PostgreSQL."""
     try:
-        with open(TABLES_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT table_name, display_name, description, columns, created_at, updated_at
+                FROM tables_metadata
+                ORDER BY created_at
+            """)
+            
+            metadata = []
+            for row in cursor.fetchall():
+                table_name = row['table_name']
+                display_name = row['display_name']
+                description = row['description']
+                columns = row['columns']
+                created_at = row['created_at']
+                updated_at = row['updated_at']
+                
+                # Converter JSONB para lista de campos
+                fields = []
+                if columns:
+                    # PostgreSQL JSONB já vem como dict/list, não precisa fazer parse
+                    if isinstance(columns, list):
+                        for field in columns:
+                            if isinstance(field, dict):
+                                fields.append({
+                                    'name': field.get('name', ''),
+                                    'type': field.get('type', 'text')
+                                })
+                    elif isinstance(columns, dict):
+                        # Se for um dict, converter para lista
+                        for field_name, field_type in columns.items():
+                            fields.append({
+                                'name': field_name,
+                                'type': field_type if isinstance(field_type, str) else 'text'
+                            })
+                
+                metadata.append({
+                    'name': table_name,
+                    'display_name': display_name or table_name,
+                    'description': description,
+                    'fields': fields,
+                    'created_at': created_at.isoformat() if created_at else None,
+                    'updated_at': updated_at.isoformat() if updated_at else None
+                })
+            
+            return metadata
+            
+    except Exception as e:
+        print(f"Erro ao carregar metadados das tabelas: {e}")
         return []
 
 def load_users():
-    """Carrega usuarios do sistema."""
+    """Carrega usuarios do sistema do banco PostgreSQL."""
     try:
-        with open(USERS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT username, password, role FROM users")
+            users = {}
+            for row in cursor.fetchall():
+                users[row['username']] = {
+                    'password': row['password'],
+                    'role': row['role']
+                }
+            return users
+    except Exception as e:
+        print(f"Erro ao carregar usuários do banco: {e}")
         return {}
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Endpoint de health check."""
+    try:
+        # Testar conexão com PostgreSQL
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT 1")
+            db_status = True
+    except Exception as e:
+        db_status = False
+        print(f"Erro na conexão com PostgreSQL: {e}")
+    
     return jsonify({
-        "status": "healthy",
+        "status": "healthy" if db_status else "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "database": os.path.exists(DB_PATH)
+        "database": "PostgreSQL",
+        "database_status": db_status
     })
 
 @app.route('/api/tables', methods=['GET'])

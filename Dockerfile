@@ -39,7 +39,6 @@ WORKDIR /app
 COPY streamlit_app.py /app/
 COPY api_server.py /app/
 COPY config.json /app/
-COPY tables.json /app/
 COPY database /app/database
 COPY data /app/data
 
