@@ -442,8 +442,9 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
         with get_db_cursor() as cursor:
             cursor.execute(f"SELECT * FROM {table_name}")
             for row in cursor.fetchall():
-                # Create a tuple of values (excluding id) for comparison
-                existing_records.add(tuple(row[1:]))  # Skip id column
+                # Convert Row object to list and create tuple (excluding id) for comparison
+                row_values = list(row.values())
+                existing_records.add(tuple(row_values[1:]))  # Skip id column
     except Exception as e:
         errors.append(f"Erro ao verificar registros existentes: {e}")
         return 0, 0, errors

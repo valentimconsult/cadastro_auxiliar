@@ -222,6 +222,19 @@ docker-compose up --build -d
 
 ## 🔍 Troubleshooting
 
+### **Erro de Importacao CSV - "unhashable type: 'slice'"**
+
+**Problema**: Erro ao importar dados CSV com a mensagem "unhashable type: 'slice'"
+
+**Causa**: Incompatibilidade entre objetos Row do psycopg2 e operacoes de slice
+
+**Solucao**: Corrigido na versao atual - o sistema agora converte corretamente os objetos Row para listas antes de fazer operacoes de slice
+
+**Verificacao**: 
+- A importacao de CSV agora funciona corretamente
+- Controle de duplicidade funcional
+- Validacao de dados mantida
+
 ### **Raspberry Pi - Docker Compose**
 
 Se voce receber erro sobre opcoes nao suportadas:
@@ -297,12 +310,28 @@ docker-compose logs postgres
 - **Senhas**: Hash SHA-256
 - **CORS**: Configurado para desenvolvimento
 
+## 🔄 Melhorias Recentes
+
+### **v1.1 - Correcao de Importacao CSV**
+- ✅ Corrigido erro "unhashable type: 'slice'" na importacao de CSV
+- ✅ Melhorada compatibilidade com PostgreSQL e psycopg2
+- ✅ Controle de duplicidade mais robusto
+- ✅ Validacao de dados aprimorada
+
+### **v1.0 - Versao Inicial**
+- ✅ Sistema completo de cadastros
+- ✅ Interface Streamlit responsiva
+- ✅ API REST funcional
+- ✅ Banco PostgreSQL integrado
+- ✅ Containerizacao Docker
+
 ## 📝 Notas Importantes
 
 1. **Primeira execucao**: Pode demorar para baixar imagens Docker
 2. **Dados**: Sao persistidos em volume Docker
 3. **Backup**: Sempre faca backup antes de atualizacoes
 4. **Portas**: Verifique se nao estao em uso por outros servicos
+5. **Importacao CSV**: Agora totalmente funcional com controle de duplicidade
 
 ## 🤝 Suporte
 
