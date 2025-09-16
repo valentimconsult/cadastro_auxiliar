@@ -2,21 +2,24 @@
 
 ## 🎯 **Visão Geral**
 
-Este sistema implementa uma arquitetura robusta de permissões baseada em grants do PostgreSQL, eliminando a dependência de arquivos JSON e proporcionando controle de acesso a nível de banco de dados.
+Este sistema implementa uma arquitetura robusta de permissões baseada em grants do PostgreSQL, proporcionando controle de acesso granular a nível de banco de dados e sistema de ativação/inativação de tabelas.
 
 ## 🏗️ **Arquitetura Implementada**
 
 ### **1. Metadados no Banco de Dados**
-- ✅ **`tables_metadata`**: Controla estrutura e definições das tabelas
-- ✅ **`users`**: Gerencia usuários do sistema
+- ✅ **`tables_metadata`**: Controla estrutura, definições e status das tabelas
+- ✅ **`users`**: Gerencia usuários do sistema com controle de status
 - ✅ **`user_table_permissions`**: Permissões específicas por tabela
 - ✅ **`user_general_permissions`**: Permissões gerais (criar tabelas, etc.)
+- ✅ **`config`**: Configurações do sistema
 
 ### **2. Sistema de Grants PostgreSQL**
 - 🔄 **Criação automática de usuários** no PostgreSQL
 - 🔄 **Grants dinâmicos** baseados em permissões da aplicação
 - 🔄 **Controle de acesso a nível de banco** de dados
 - 🔄 **Integração completa** entre aplicação e PostgreSQL
+- 🔄 **Sistema de ativação/inativação** de tabelas
+- 🔄 **Permissões automáticas** para criadores de tabelas
 
 ## 🔧 **Componentes Principais**
 
