@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS tables_metadata (
     display_name VARCHAR(200),
     description TEXT,
     columns JSONB NOT NULL,
+    status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

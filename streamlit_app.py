@@ -34,17 +34,74 @@ def load_users() -> dict:
     """Load the user database from the PostgreSQL database."""
     try:
         with get_db_cursor() as cursor:
-            cursor.execute("SELECT username, password, role FROM users")
+            cursor.execute("SELECT username, password, role, status FROM users ORDER BY username")
             users = {}
             for row in cursor.fetchall():
                 users[row['username']] = {
                     'password': row['password'],
-                    'role': row['role']
+                    'role': row['role'],
+                    'status': row['status']
                 }
             return users
     except Exception as e:
         st.error(f"Erro ao carregar usuários do banco: {e}")
         return {}
+
+
+def toggle_user_status(username: str, new_status: str) -> dict:
+    """Ativar ou inativar usuário no banco de dados."""
+    if new_status not in ['ativo', 'inativo']:
+        raise ValueError("Status deve ser 'ativo' ou 'inativo'")
+    
+    results = {
+        'user_id': None,
+        'username': username,
+        'old_status': None,
+        'new_status': new_status,
+        'success': False,
+        'errors': []
+    }
+    
+    try:
+        with get_db_cursor() as cursor:
+            # 1. Verificar se usuário existe e obter status atual
+            cursor.execute("SELECT id, status FROM users WHERE username = %s", (username,))
+            user_row = cursor.fetchone()
+            if not user_row:
+                raise ValueError(f"Usuário '{username}' não encontrado na tabela users")
+            
+            user_id = user_row['id']
+            old_status = user_row['status']
+            results['user_id'] = user_id
+            results['old_status'] = old_status
+            
+            print(f"✅ Usuário '{username}' encontrado com ID: {user_id}, status atual: {old_status}")
+            
+            # 2. Atualizar status do usuário
+            cursor.execute("UPDATE users SET status = %s, updated_at = NOW() WHERE username = %s", (new_status, username))
+            updated_rows = cursor.rowcount
+            
+            if updated_rows > 0:
+                results['success'] = True
+                print(f"✅ Usuário '{username}' {new_status} com sucesso!")
+            else:
+                raise Exception(f"Falha ao atualizar status do usuário '{username}'")
+            
+            # 3. Verificar se realmente foi atualizado
+            cursor.execute("SELECT status FROM users WHERE username = %s", (username,))
+            updated_user = cursor.fetchone()
+            if updated_user and updated_user['status'] != new_status:
+                raise Exception(f"Falha: Status do usuário '{username}' não foi atualizado corretamente")
+                
+    except Exception as e:
+        error_msg = f"Erro ao alterar status do usuário {username}: {e}"
+        results['errors'].append(error_msg)
+        print(f"❌ {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise
+    
+    return results
 
 
 def save_users(users: dict) -> None:
@@ -89,22 +146,162 @@ def save_users(users: dict) -> None:
         raise
 
 
-def load_tables_metadata() -> list:
+def apply_auto_permissions_for_existing_tables(username: str) -> None:
+    """Aplica permissões automáticas para um usuário em todas as tabelas existentes."""
+    try:
+        # Obter ID do usuário
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+            user_row = cursor.fetchone()
+            if not user_row:
+                return
+            
+            user_id = user_row['id']
+            
+            # Obter todas as tabelas ativas
+            cursor.execute("SELECT table_name FROM tables_metadata WHERE status = 'ativo'")
+            tables = cursor.fetchall()
+            
+            for table in tables:
+                table_name = table['table_name']
+                
+                # Aplicar permissões automáticas: visualizar, inserir, editar
+                cursor.execute("""
+                    INSERT INTO user_table_permissions (user_id, table_name, can_view, can_insert, can_update, can_delete)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, table_name)
+                    DO UPDATE SET
+                        can_view = EXCLUDED.can_view,
+                        can_insert = EXCLUDED.can_insert,
+                        can_update = EXCLUDED.can_update,
+                        can_delete = EXCLUDED.can_delete,
+                        granted_at = CURRENT_TIMESTAMP
+                """, (user_id, table_name, True, True, True, False))  # can_delete = False por padrão
+            
+            print(f"✅ Permissões automáticas aplicadas para {username} em {len(tables)} tabelas existentes")
+            
+    except Exception as e:
+        print(f"❌ Erro ao aplicar permissões automáticas para {username} nas tabelas existentes: {e}")
+
+
+def apply_auto_permissions_for_table_creator(username: str, table_name: str) -> None:
+    """Aplica permissões automáticas para o criador da tabela se ele tem permissão geral de criar tabelas."""
+    try:
+        # Verificar se o usuário tem permissão geral de criar tabelas
+        if not check_user_general_permission(username, "create_tables"):
+            return
+        
+        # Obter ID do usuário
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+            user_row = cursor.fetchone()
+            if not user_row:
+                return
+            
+            user_id = user_row['id']
+            
+            # Aplicar permissões automáticas: visualizar, inserir, editar
+            cursor.execute("""
+                INSERT INTO user_table_permissions (user_id, table_name, can_view, can_insert, can_update, can_delete)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, table_name)
+                DO UPDATE SET
+                    can_view = EXCLUDED.can_view,
+                    can_insert = EXCLUDED.can_insert,
+                    can_update = EXCLUDED.can_update,
+                    can_delete = EXCLUDED.can_delete,
+                    granted_at = CURRENT_TIMESTAMP
+            """, (user_id, table_name, True, True, True, False))  # can_delete = False por padrão
+            
+            print(f"✅ Permissões automáticas aplicadas para {username} na tabela {table_name}")
+            
+    except Exception as e:
+        print(f"❌ Erro ao aplicar permissões automáticas para {username}: {e}")
+
+
+def toggle_table_status(table_name: str, new_status: str) -> dict:
+    """Ativar ou inativar tabela no banco de dados."""
+    if new_status not in ['ativo', 'inativo']:
+        raise ValueError("Status deve ser 'ativo' ou 'inativo'")
+    
+    results = {
+        'table_id': None,
+        'table_name': table_name,
+        'old_status': None,
+        'new_status': new_status,
+        'success': False,
+        'errors': []
+    }
+    
+    try:
+        with get_db_cursor() as cursor:
+            # 1. Verificar se tabela existe e obter status atual
+            cursor.execute("SELECT id, status FROM tables_metadata WHERE table_name = %s", (table_name,))
+            table_row = cursor.fetchone()
+            if not table_row:
+                raise ValueError(f"Tabela '{table_name}' não encontrada na tabela tables_metadata")
+            
+            table_id = table_row['id']
+            old_status = table_row['status']
+            results['table_id'] = table_id
+            results['old_status'] = old_status
+            
+            print(f"✅ Tabela '{table_name}' encontrada com ID: {table_id}, status atual: {old_status}")
+            
+            # 2. Atualizar status da tabela
+            cursor.execute("UPDATE tables_metadata SET status = %s, updated_at = NOW() WHERE table_name = %s", (new_status, table_name))
+            updated_rows = cursor.rowcount
+            
+            if updated_rows > 0:
+                results['success'] = True
+                print(f"✅ Tabela '{table_name}' {new_status} com sucesso!")
+            else:
+                raise Exception(f"Falha ao atualizar status da tabela '{table_name}'")
+            
+            # 3. Verificar se realmente foi atualizado
+            cursor.execute("SELECT status FROM tables_metadata WHERE table_name = %s", (table_name,))
+            updated_table = cursor.fetchone()
+            if updated_table and updated_table['status'] != new_status:
+                raise Exception(f"Falha: Status da tabela '{table_name}' não foi atualizado corretamente")
+                
+    except Exception as e:
+        error_msg = f"Erro ao alterar status da tabela {table_name}: {e}"
+        results['errors'].append(error_msg)
+        print(f"❌ {error_msg}")
+        import traceback
+        traceback.print_exc()
+    
+    return results
+
+
+def load_tables_metadata(include_inactive: bool = False) -> list:
     """Load the table definitions from the database."""
     try:
         with get_db_cursor() as cursor:
-            cursor.execute("""
-                SELECT table_name, display_name, description, columns, created_at, updated_at
-                FROM tables_metadata
-                ORDER BY created_at
-            """)
+            if include_inactive:
+                # Carregar todas as tabelas (ativas e inativas) - para administradores
+                cursor.execute("""
+                    SELECT id, table_name, display_name, description, columns, status, created_at, updated_at
+                    FROM tables_metadata
+                    ORDER BY created_at
+                """)
+            else:
+                # Carregar apenas tabelas ativas - para usuarios normais
+                cursor.execute("""
+                    SELECT id, table_name, display_name, description, columns, status, created_at, updated_at
+                    FROM tables_metadata
+                    WHERE status = 'ativo'
+                    ORDER BY created_at
+                """)
             
             metadata = []
             for row in cursor.fetchall():
+                table_id = row['id']
                 table_name = row['table_name']
                 display_name = row['display_name']
                 description = row['description']
                 columns = row['columns']
+                status = row['status']
                 created_at = row['created_at']
                 updated_at = row['updated_at']
                 
@@ -154,10 +351,12 @@ def load_tables_metadata() -> list:
                     print(f"Tabela {table_name} nao tem campos definidos")
                 
                 metadata.append({
+                    'id': table_id,
                     'name': table_name,
                     'display_name': display_name or table_name,
                     'description': description,
                     'fields': fields,
+                    'status': status,
                     'created_at': created_at.isoformat() if created_at else None,
                     'updated_at': updated_at.isoformat() if updated_at else None
                 })
@@ -176,7 +375,7 @@ def refresh_table_metadata(table_name: str) -> dict:
     try:
         with get_db_cursor() as cursor:
             cursor.execute("""
-                SELECT table_name, display_name, description, columns, created_at, updated_at
+                SELECT id, table_name, display_name, description, columns, created_at, updated_at
                 FROM tables_metadata
                 WHERE table_name = %s
             """, (table_name,))
@@ -197,6 +396,7 @@ def refresh_table_metadata(table_name: str) -> dict:
                         })
             
             return {
+                'id': row['id'],
                 'name': row['table_name'],
                 'display_name': row['display_name'] or row['table_name'],
                 'description': row['description'],
@@ -684,12 +884,17 @@ def login_screen() -> None:
     if st.button("Entrar"):
         users = load_users()
         if username in users and users[username]["password"] == hash_password(password):
-            st.session_state.logged_in = True
-            st.session_state.username = username
-            st.session_state.role = users[username].get("role", "user")
-            st.experimental_rerun()
+            # Verificar se o usuário está ativo
+            user_status = users[username].get("status", "ativo")
+            if user_status == "ativo":
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.role = users[username].get("role", "user")
+                st.rerun()
+            else:
+                st.error("❌ Usuário inativo. Entre em contato com o administrador.")
         else:
-            st.error("Usuário ou senha incorretos.")
+            st.error("❌ Usuário ou senha incorretos.")
 
 
 def page_create_table() -> None:
@@ -767,11 +972,15 @@ def page_create_table() -> None:
             with get_db_cursor() as cursor:
                 columns_json = json.dumps(field_defs)
                 cursor.execute("""
-                    INSERT INTO tables_metadata (table_name, display_name, columns, created_at)
-                    VALUES (%s, %s, %s, %s)
-                """, (table_name, table_display_name, columns_json, datetime.now()))
+                    INSERT INTO tables_metadata (table_name, display_name, columns, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (table_name, table_display_name, columns_json, 'ativo', datetime.now()))
+                
+                # Aplicar permissões automáticas para o criador da tabela
+                apply_auto_permissions_for_table_creator(username, table_name)
                 
                 st.success("Tabela criada com sucesso!")
+                st.info("Permissões automáticas aplicadas: Visualizar, Inserir e Editar")
         except Exception as e:
             st.error(f"Erro ao salvar metadados: {e}")
             return
@@ -784,42 +993,54 @@ def page_manage_tables() -> None:
     
     # Filtrar tabelas baseado nas permissões do usuário
     username = st.session_state.get("username", "")
-    metadata = load_tables_metadata()
+    role = st.session_state.get("role", "")
+    
+    # Administradores podem ver todas as tabelas (ativas e inativas)
+    if role == "admin":
+        metadata = load_tables_metadata(include_inactive=True)
+    else:
+        metadata = load_tables_metadata(include_inactive=False)
+    
     filtered_metadata = filter_tables_by_permission(metadata, username)
     
     if not filtered_metadata:
         st.info("Nenhuma tabela disponível para você ou nenhuma tabela foi criada ainda.")
         return
     
-    # Botão de refresh manual
-    col1, col2 = st.columns([3, 1])
-    with col1:
+    # Seleção de tabela
+    if role == "admin":
+        # Para administradores, mostrar status das tabelas
+        table_options = []
+        for t in filtered_metadata:
+            status_icon = "✅" if t.get('status', 'ativo') == 'ativo' else "❌"
+            table_options.append(f"{status_icon} {t['display_name']}")
+        
+        choice_with_status = st.selectbox("Selecione a tabela", options=table_options, key="table_selector")
+        # Extrair o nome da tabela removendo o ícone de status
+        choice = choice_with_status.split(" ", 1)[1] if " " in choice_with_status else choice_with_status
+    else:
+        # Para usuários normais, mostrar apenas tabelas ativas
         table_names = [t['display_name'] for t in filtered_metadata]
         choice = st.selectbox("Selecione a tabela", options=table_names, key="table_selector")
-    with col2:
-        if st.button("🔄 Atualizar", help="Recarregar metadados da tabela", key="refresh_metadata"):
-            # Sincronizar estrutura da tabela com metadados
-            if selected_meta:
-                sync_table_structure_with_metadata(selected_meta['name'])
-            
-            # Forçar refresh dos metadados
-            st.cache_data.clear()
-            st.experimental_rerun()
     
-    selected_meta = next((t for t in filtered_metadata if t['display_name'] == choice), None)
-    
-    # Se uma tabela foi selecionada, sincronizar e recarregar metadados
-    if selected_meta:
-        # Sincronizar estrutura da tabela com metadados
-        sync_table_structure_with_metadata(selected_meta['name'])
-        
-        # Recarregar metadados atualizados
-        refreshed_meta = refresh_table_metadata(selected_meta['name'])
-        if refreshed_meta:
-            selected_meta = refreshed_meta
+    # Encontrar metadados da tabela selecionada
+    selected_meta = None
+    for t in filtered_metadata:
+        if t['display_name'] == choice:
+            selected_meta = t
+            break
     
     if selected_meta is None:
         st.error("Tabela não encontrada.")
+        return
+    
+    # Sincronizar estrutura da tabela com metadados
+    sync_table_structure_with_metadata(selected_meta['name'])
+    
+    # Verificar se a tabela está ativa (usuários normais não podem acessar tabelas inativas)
+    if role != "admin" and selected_meta.get('status', 'ativo') != 'ativo':
+        st.error("❌ Esta tabela está inativa e não pode ser acessada.")
+        st.info("Entre em contato com o administrador para reativar esta tabela.")
         return
     
     # Verificar permissões para esta tabela específica
@@ -830,7 +1051,10 @@ def page_manage_tables() -> None:
     can_delete = check_user_permission(username, table_name, "delete")
     
     # Show basic information about the table
-    st.subheader(f"Tabela: {selected_meta['display_name']}")
+    status_icon = "✅" if selected_meta.get('status', 'ativo') == 'ativo' else "❌"
+    status_text = "Ativa" if selected_meta.get('status', 'ativo') == 'ativo' else "Inativa"
+    
+    st.subheader(f"Tabela: {selected_meta['display_name']} {status_icon} ({status_text})")
     st.write("Campos:")
     fields_df = pd.DataFrame(selected_meta['fields'])
     st.table(fields_df)
@@ -856,9 +1080,9 @@ def page_manage_tables() -> None:
     if can_delete:
         available_options.append("Excluir registro")
     
-    # Apenas admin pode excluir tabelas
+    # Apenas admin pode gerenciar tabelas (excluir/ativar/inativar)
     if st.session_state.get("role") == "admin":
-        available_options.append("Excluir tabela")
+        available_options.append("Gerenciar tabela")
     
     if not available_options:
         st.warning("Você não tem permissões para realizar nenhuma operação nesta tabela.")
@@ -880,8 +1104,8 @@ def page_manage_tables() -> None:
         delete_record_form(selected_meta)
     elif subpage == "Adicionar campo" and can_update:
         add_field_to_table(selected_meta)
-    elif subpage == "Excluir tabela" and st.session_state.get("role") == "admin":
-        delete_table(selected_meta)
+    elif subpage == "Gerenciar tabela" and st.session_state.get("role") == "admin":
+        manage_table_admin(selected_meta)
 
 
 def batch_upload_form(table_meta: dict) -> None:
@@ -1161,34 +1385,149 @@ def add_field_to_table(table_meta: dict) -> None:
                     st.cache_data.clear()
                 
                 # Forçar refresh da página mantendo o modo selecionado
-                st.experimental_rerun()
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Erro ao adicionar coluna: {e}")
                 return
 
 
+def manage_table_admin(table_meta: dict) -> None:
+    """Permite ao administrador gerenciar o status da tabela (ativar/inativar)."""
+    st.subheader("Gerenciar tabela")
+    
+    # Mostrar informações da tabela
+    st.info(f"📋 **Tabela:** {table_meta['display_name']}")
+    st.info(f"🔧 **Nome interno:** {table_meta['name']}")
+    st.info(f"🆔 **ID do metadado:** {table_meta.get('id', 'N/A')}")
+    st.info(f"📊 **Status atual:** {table_meta.get('status', 'ativo')}")
+    
+    # Mostrar opções baseadas no status atual
+    current_status = table_meta.get('status', 'ativo')
+    
+    if current_status == 'ativo':
+        st.warning("Esta tabela está ativa e aparece no seletor para usuários com permissão.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🚫 Inativar tabela", type="secondary"):
+                try:
+                    result = toggle_table_status(table_meta['name'], 'inativo')
+                    if result['success']:
+                        st.success("✅ Tabela inativada com sucesso!")
+                        st.info("A tabela foi removida do seletor de tabelas.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Erro ao inativar tabela: {', '.join(result['errors'])}")
+                except Exception as e:
+                    st.error(f"❌ Erro ao inativar tabela: {e}")
+        
+        with col2:
+            st.info("ℹ️ Tabela ativa - disponível para usuários")
+    
+    else:  # status == 'inativo'
+        st.info("Esta tabela está inativa e não aparece no seletor para usuários.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("✅ Ativar tabela", type="primary"):
+                try:
+                    result = toggle_table_status(table_meta['name'], 'ativo')
+                    if result['success']:
+                        st.success("✅ Tabela ativada com sucesso!")
+                        st.info("A tabela agora aparece no seletor para usuários com permissão.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Erro ao ativar tabela: {', '.join(result['errors'])}")
+                except Exception as e:
+                    st.error(f"❌ Erro ao ativar tabela: {e}")
+        
+        with col2:
+            st.info("ℹ️ Tabela inativa - oculta dos usuários")
+    
+    # Mostrar informações sobre o impacto
+    st.markdown("---")
+    st.markdown("### 📋 Informações sobre o status da tabela")
+    
+    if current_status == 'ativo':
+        st.markdown("""
+        **Tabela Ativa:**
+        - ✅ Aparece no seletor de tabelas para usuários com permissão
+        - ✅ Usuários podem visualizar, inserir, editar e excluir dados
+        - ✅ Todas as funcionalidades estão disponíveis
+        """)
+    else:
+        st.markdown("""
+        **Tabela Inativa:**
+        - ❌ Não aparece no seletor de tabelas para nenhum usuário
+        - ❌ Usuários não podem acessar os dados
+        - ✅ Dados são preservados no banco de dados
+        - ✅ Pode ser reativada a qualquer momento
+        """)
+
+
 def delete_table(table_meta: dict) -> None:
-    """Allow the administrator to remove a table permanently."""
-    st.subheader("Excluir tabela")
+    """Allow the administrator to inactivate a table (soft delete)."""
+    st.subheader("Inativar tabela")
+    
+    # Mostrar informações da tabela que será inativada
+    st.info(f"📋 **Tabela selecionada:** {table_meta['display_name']}")
+    st.info(f"🔧 **Nome interno:** {table_meta['name']}")
+    st.info(f"🆔 **ID do metadado:** {table_meta.get('id', 'N/A')}")
+    st.info(f"📊 **Status atual:** {table_meta.get('status', 'ativo')}")
+    
     st.warning(
-        "Esta ação removerá permanentemente a tabela e todos os dados associados. "
-        "Esta operação não pode ser desfeita."
+        "Esta ação irá inativar a tabela, removendo-a do seletor de tabelas para todos os usuários. "
+        "Os dados serão preservados e a tabela poderá ser reativada posteriormente."
     )
-    if st.button("Confirmar exclusão"):
-        try:
-            drop_table(table_meta['name'])
-            # Remove metadata do banco
+    
+    # Checkbox de confirmação obrigatório
+    confirm_inactivate = st.checkbox(
+        "✅ Confirmo que desejo inativar esta tabela",
+        key="confirm_inactivate_table"
+    )
+    
+    # Botão de inativação só aparece se o checkbox estiver marcado
+    if confirm_inactivate:
+        if st.button("🚫 Confirmar inativação", type="primary"):
             try:
-                with get_db_cursor() as cursor:
-                    cursor.execute("DELETE FROM tables_metadata WHERE table_name = %s", (table_meta['name'],))
-                    st.success("Tabela excluída com sucesso!")
-                    st.experimental_rerun()
+                table_name = table_meta['name']
+                table_id = table_meta.get('id')
+                
+                st.info(f"🚫 Iniciando inativação da tabela '{table_name}' (ID: {table_id})...")
+                
+                # Usar a função toggle_table_status para inativar
+                result = toggle_table_status(table_name, 'inativo')
+                
+                if result['success']:
+                    st.success("✅ Tabela inativada com sucesso!")
+                    st.info(f"📊 Status alterado de '{result['old_status']}' para '{result['new_status']}'")
+                    st.info("🔄 Atualizando lista de tabelas...")
+                    
+                    # Limpar cache e forçar atualização
+                    st.cache_data.clear()
+                    
+                    # Aguardar um momento para garantir que a transação foi commitada
+                    import time
+                    time.sleep(0.5)
+                    
+                    # Forçar rerun
+                    st.rerun()
+                else:
+                    st.error(f"❌ Erro ao inativar tabela: {', '.join(result['errors'])}")
+                    st.info("🔍 Verifique os logs da aplicação para mais detalhes.")
+                
             except Exception as e:
-                st.error(f"Erro ao remover metadados: {e}")
-                return
-        except Exception as e:
-            st.error(f"Erro ao excluir tabela: {e}")
+                st.error(f"❌ Erro ao inativar tabela: {e}")
+                st.info("🔍 Verifique os logs da aplicação para mais detalhes.")
+                import traceback
+                st.error(f"Detalhes do erro: {traceback.format_exc()}")
+    else:
+        st.info("ℹ️ Marque a caixa de confirmação para habilitar a inativação")
 
 
 def page_config() -> None:
@@ -1221,7 +1560,7 @@ def page_config() -> None:
         cfg["logo"] = resized_logo_path
         save_config(cfg)
         st.success("Logo atualizada com sucesso!")
-        st.experimental_rerun()
+        st.rerun()
 
 
 def page_manage_users() -> None:
@@ -1239,23 +1578,108 @@ def page_manage_users() -> None:
         users = load_users()
         user_list = list(users.keys())
         user_df = pd.DataFrame([
-            {"Usuário": u, "Perfil": users[u].get("role", "user")} for u in user_list
+            {
+                "Usuário": u, 
+                "Perfil": users[u].get("role", "user"),
+                "Status": users[u].get("status", "ativo")
+            } for u in user_list
         ])
         st.table(user_df)
         
-        # Excluir usuário
+        # Gerenciar status do usuário
         st.divider()
-        st.subheader("Excluir usuário")
+        st.subheader("Gerenciar Status do Usuário")
         if len(users) > 1:
-            selected_user = st.selectbox("Selecione o usuário a excluir", options=[u for u in users if u != "admin"])
-            if st.button("Excluir usuário"):
-                if selected_user in users:
-                    del users[selected_user]
-                    save_users(users)
-                    st.success("Usuário excluído com sucesso!")
-                    st.experimental_rerun()
+            selected_user = st.selectbox("Selecione o usuário para alterar status", options=[u for u in users if u != "admin"])
+            
+            # Mostrar informações do usuário selecionado
+            if selected_user:
+                current_status = users[selected_user].get('status', 'ativo')
+                status_icon = "🟢" if current_status == 'ativo' else "🔴"
+                
+                st.info(f"👤 **Usuário selecionado:** {selected_user}")
+                st.info(f"🔧 **Perfil:** {users[selected_user].get('role', 'user')}")
+                st.info(f"{status_icon} **Status atual:** {current_status.upper()}")
+                
+                # Opções de status
+                st.markdown("---")
+                st.markdown("**🔄 Alterar status do usuário:**")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("🟢 Ativar Usuário", type="primary", disabled=(current_status == 'ativo')):
+                        try:
+                            st.info(f"🔄 Ativando usuário '{selected_user}'...")
+                            
+                            results = toggle_user_status(selected_user, 'ativo')
+                            
+                            if results['success']:
+                                st.success(f"✅ Usuário '{selected_user}' ativado com sucesso!")
+                                
+                                # Mostrar detalhes
+                                with st.expander("📊 Detalhes da ativação", expanded=True):
+                                    st.write(f"**ID do usuário:** {results['user_id']}")
+                                    st.write(f"**Status anterior:** {results['old_status']}")
+                                    st.write(f"**Novo status:** {results['new_status']}")
+                                
+                                st.info("🔄 Atualizando lista de usuários...")
+                                
+                                # Limpar cache e forçar atualização
+                                st.cache_data.clear()
+                                import time
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("❌ Falha ao ativar usuário!")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Erro ao ativar usuário '{selected_user}': {e}")
+                            import traceback
+                            st.error(f"Detalhes do erro: {traceback.format_exc()}")
+                
+                with col2:
+                    if st.button("🔴 Inativar Usuário", type="secondary", disabled=(current_status == 'inativo')):
+                        try:
+                            st.info(f"🔄 Inativando usuário '{selected_user}'...")
+                            
+                            results = toggle_user_status(selected_user, 'inativo')
+                            
+                            if results['success']:
+                                st.success(f"✅ Usuário '{selected_user}' inativado com sucesso!")
+                                
+                                # Mostrar detalhes
+                                with st.expander("📊 Detalhes da inativação", expanded=True):
+                                    st.write(f"**ID do usuário:** {results['user_id']}")
+                                    st.write(f"**Status anterior:** {results['old_status']}")
+                                    st.write(f"**Novo status:** {results['new_status']}")
+                                
+                                st.info("🔄 Atualizando lista de usuários...")
+                                
+                                # Limpar cache e forçar atualização
+                                st.cache_data.clear()
+                                import time
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("❌ Falha ao inativar usuário!")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Erro ao inativar usuário '{selected_user}': {e}")
+                            import traceback
+                            st.error(f"Detalhes do erro: {traceback.format_exc()}")
+                
+                # Informações sobre o status
+                st.markdown("---")
+                st.markdown("**ℹ️ Informações sobre o status:**")
+                st.info("""
+                - **🟢 ATIVO**: Usuário pode acessar a aplicação normalmente
+                - **🔴 INATIVO**: Usuário não pode acessar a aplicação (acesso bloqueado)
+                - **Admin**: Sempre permanece ativo e não pode ser inativado
+                - **Dados preservados**: Usuários inativos mantêm todos os dados e permissões
+                """)
         else:
-            st.info("Nenhum usuário removível.")
+            st.info("ℹ️ Nenhum usuário gerenciável (apenas admin existe).")
     
     with tab2:
         manage_user_permissions()
@@ -1285,7 +1709,7 @@ def page_manage_users() -> None:
                     }
                     save_users(users)
                     st.success("Usuário adicionado com sucesso!")
-                    st.experimental_rerun()
+                    st.rerun()
     
     with tab5:
         st.subheader("Gerenciamento de Usuários PostgreSQL")
@@ -1504,7 +1928,7 @@ def manage_user_permissions() -> None:
             if submitted:
                 save_user_permissions(selected_user, permissions_data)
                 st.success("Permissões salvas com sucesso!")
-                st.experimental_rerun()
+                st.rerun()
 
 
 def save_user_permissions(username: str, permissions: list) -> None:
@@ -1602,7 +2026,13 @@ def save_user_general_permissions(username: str, can_create_tables: bool) -> Non
             except Exception as e:
                 print(f"Aviso: Não foi possível aplicar grants gerais para {username}: {e}")
             
+            # Se o usuário recebeu permissão de criar tabelas, aplicar permissões automáticas nas tabelas existentes
+            if can_create_tables:
+                apply_auto_permissions_for_existing_tables(username)
+            
             st.success(f"Permissões gerais para {username} salvas com sucesso!")
+            if can_create_tables:
+                st.info("Permissões automáticas aplicadas nas tabelas existentes: Visualizar, Inserir e Editar")
             
     except Exception as e:
         st.error(f"Erro ao salvar permissões gerais: {e}")
@@ -1653,7 +2083,7 @@ def manage_user_general_permissions() -> None:
             
             if submitted:
                 save_user_general_permissions(selected_user, can_create_tables)
-                st.experimental_rerun()
+                st.rerun()
 
 
 def filter_tables_by_permission(metadata: list, username: str) -> list:
@@ -1984,13 +2414,13 @@ def edit_record_form(table_meta: dict) -> None:
                             # Atualizar registro
                             if update_record(table_meta['name'], record_id, filtered_values):
                                 st.success("Registro atualizado com sucesso!")
-                                st.experimental_rerun()
+                                st.rerun()
                             else:
                                 st.error("Erro ao atualizar registro.")
                         
                         if cancel:
                             st.info("Edição cancelada.")
-                            st.experimental_rerun()
+                            st.rerun()
                 
                 if not fields_to_edit:
                     st.info("Selecione pelo menos um campo para editar.")
@@ -2088,7 +2518,7 @@ def delete_record_form(table_meta: dict) -> None:
                                 st.success(f"🎉 Registro ID {record_id} excluído com sucesso!")
                                 cursor.close()
                                 conn.close()
-                                st.experimental_rerun()
+                                st.rerun()
                             else:
                                 st.warning(f"⚠️ Nenhum registro foi excluído. ID {record_id} pode não existir.")
                                 cursor.close()
@@ -2107,7 +2537,7 @@ def delete_record_form(table_meta: dict) -> None:
                     
                     if cancel:
                         st.info("Exclusão cancelada.")
-                        st.experimental_rerun()
+                        st.rerun()
                         
     except Exception as e:
         st.error(f"Erro ao carregar dados para exclusão: {e}")
@@ -2134,7 +2564,7 @@ def main() -> None:
         st.session_state.logged_in = False
         st.session_state.username = None
         st.session_state.role = None
-        st.experimental_rerun()
+        st.rerun()
     # Main menu
     menu_options = ["Página Inicial", "Gerenciar Tabelas", "Configurações"]
     
