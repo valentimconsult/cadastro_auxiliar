@@ -331,6 +331,22 @@ docker-compose logs cadastro_banco
 chmod +x scripts/*.sh
 ```
 
+#### **Erro de Login - Coluna "status" não existe**
+Se você receber o erro `column "status" does not exist` ao tentar fazer login:
+
+**Solução:**
+```bash
+# Conectar ao PostgreSQL
+docker exec -it cadastro_banco psql -U cadastro_user -d cadastro_db
+
+# Executar migração
+ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo'));
+UPDATE users SET status = 'ativo' WHERE status IS NULL;
+\q
+```
+
+> **📌 Nota**: Este erro só ocorre em instalações antigas. Novas instalações já incluem a coluna `status` automaticamente.
+
 ## 📈 **Monitoramento**
 
 ### **Health Checks**

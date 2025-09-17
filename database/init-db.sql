@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(100) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role VARCHAR(50) DEFAULT 'user',
+    status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -60,8 +61,8 @@ CREATE TABLE IF NOT EXISTS user_general_permissions (
 );
 
 -- Inserir usuario admin padrao
-INSERT INTO users (username, password, role) 
-VALUES ('admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'admin')
+INSERT INTO users (username, password, role, status) 
+VALUES ('admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'admin', 'ativo')
 ON CONFLICT (username) DO NOTHING;
 
 -- Criar usuario admin no PostgreSQL com privilégios de superusuário
@@ -99,3 +100,19 @@ CREATE TRIGGER update_tables_metadata_updated_at BEFORE UPDATE ON tables_metadat
 
 CREATE TRIGGER update_config_updated_at BEFORE UPDATE ON config
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Migracao para adicionar coluna status se nao existir (para bancos existentes)
+DO $$
+BEGIN
+    -- Verificar se a coluna status existe na tabela users
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'status'
+    ) THEN
+        -- Adicionar coluna status
+        ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo'));
+        
+        -- Atualizar usuarios existentes para status ativo
+        UPDATE users SET status = 'ativo' WHERE status IS NULL;
+    END IF;
+END $$;
