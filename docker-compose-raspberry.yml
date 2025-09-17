@@ -1,12 +1,12 @@
-# Docker Compose para Cadastro Streamlit - Versao Simplificada
-# Compativel com Docker Compose v1 e v2 (incluindo Raspberry Pi)
+# Docker Compose para Cadastro Streamlit - Versao Raspberry Pi
+# Compativel com Docker Compose v1.29.2 e sistemas ARM64
 
 version: '3.8'
 
 services:
-  # Servico PostgreSQL
+  # Servico PostgreSQL - Versao mais estavel para Raspberry Pi
   postgres:
-    image: postgres:15-alpine
+    image: postgres:13-alpine
     container_name: cadastro_banco
     environment:
       POSTGRES_DB: cadastro_db
@@ -18,16 +18,16 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
-      - ./database/backups:/backups:rw
     restart: unless-stopped
     networks:
       - cadastro-network
+    # Healthcheck simplificado para compatibilidade
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db"]
+      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 40s
 
   cadastro-app:
     build:
@@ -57,8 +57,7 @@ services:
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
 
   api-server:
     build:
@@ -86,8 +85,7 @@ services:
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
 
 volumes:
   postgres_data:
@@ -95,4 +93,4 @@ volumes:
 
 networks:
   cadastro-network:
-    driver: bridge 
+    driver: bridge
