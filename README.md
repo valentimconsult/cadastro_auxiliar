@@ -57,188 +57,48 @@ cd "caminho\para\seu\projeto\cadastro_auxiliar"
 .\scripts\start-app-postgres.ps1
 ```
 
-### **Linux/Mac (Terminal)**
-```bash
-# Dar permissão de execução
-chmod +x scripts/start-app-postgres.sh
-
-# Executar
-./scripts/start-app-postgres.sh
-```
-
-### **Raspberry Pi (Ubuntu/Linux ARM64)**
+### **Linux/Mac (Terminal) - Unificado**
 ```bash
 # Navegar para o diretório do projeto
 cd caminho/para/seu/projeto/cadastro_auxiliar
 
 # Dar permissão de execução
-chmod +x scripts/start-app-raspberry.sh
+chmod +x scripts/start-app-linux.sh
 
-# Executar (versão otimizada para Raspberry Pi)
-./scripts/start-app-raspberry.sh
+# Executar (detecta automaticamente Desktop ou Raspberry Pi)
+./scripts/start-app-linux.sh
 ```
 
-**Windows (PowerShell):**
-```powershell
-# Navegar para o diretório do projeto
-cd "caminho\para\seu\projeto\cadastro_auxiliar"
+> **📌 Nota**: O script detecta automaticamente se está rodando em Raspberry Pi e aplica otimizações específicas. Funciona tanto em desktop quanto em Raspberry Pi com 16GB de RAM.
 
-# Executar
-.\scripts\start-app-raspberry.ps1
-```
+### **Troubleshooting**
 
-> **📌 Nota para Raspberry Pi**: Use o arquivo `docker-compose-raspberry.yml` e o script `start-app-raspberry.sh` para melhor compatibilidade.
-
-#### **Problema Específico do Raspberry Pi**
-
-O erro `KeyError: 'ContainerConfig'` ocorre devido a incompatibilidades entre:
-- Docker Compose v1.29.2 (versão mais antiga comum no Raspberry Pi)
-- Imagens Docker que não possuem a estrutura de metadados esperada
-- Configurações de volumes que causam conflitos
-
-#### **Solução Implementada**
-
-**Arquivo `docker-compose-raspberry.yml`**:
-- PostgreSQL 13-alpine (mais estável que 15-alpine)
-- Formato YAML para variáveis de ambiente
-- Healthcheck simplificado e robusto
-- Dependências básicas sem healthcheck dependencies
-
-#### **Pré-requisitos para Raspberry Pi**
-
-1. **Docker instalado**:
-   ```bash
-   curl -fsSL https://get.docker.com -o get-docker.sh
-   sudo sh get-docker.sh
-   sudo usermod -aG docker $USER
-   ```
-
-2. **Docker Compose instalado**:
-   ```bash
-   sudo apt-get update
-   sudo apt-get install docker-compose
-   ```
-
-#### **Comandos Úteis para Raspberry Pi**
-
-**Ver logs:**
+**Problemas comuns:**
 ```bash
-docker-compose -f docker-compose-raspberry.yml logs -f
-```
+# Verificar logs
+docker-compose logs
 
-**Parar aplicação:**
-```bash
-docker-compose -f docker-compose-raspberry.yml down
-```
+# Verificar status dos containers
+docker-compose ps
 
-**Reiniciar aplicação:**
-```bash
-docker-compose -f docker-compose-raspberry.yml restart
-```
+# Reiniciar aplicação
+docker-compose restart
 
-**Limpar tudo e recomeçar:**
-```bash
-docker-compose -f docker-compose-raspberry.yml down -v
+# Limpar tudo e recomeçar
+docker-compose down -v
 docker system prune -f
-./scripts/start-app-raspberry.sh
+./scripts/start-app-linux.sh
 ```
 
-#### **Troubleshooting Raspberry Pi**
-
-**Erro "ContainerConfig":**
+**Problemas de memória (Raspberry Pi):**
 ```bash
-# Limpe completamente o Docker
-docker system prune -a -f
-docker volume prune -f
-
-# Use a versão específica do PostgreSQL
-docker pull postgres:13-alpine
-
-# Execute novamente
-./scripts/start-app-raspberry.sh
-```
-
-**Erro "could not translate host name 'postgres'":**
-```bash
-# Verificar se os containers estão na mesma rede
-docker network ls
-docker network inspect cadastro_auxiliar_cadastro-network
-
-# Verificar se o PostgreSQL está rodando
-docker ps | grep postgres
-
-# Verificar logs do PostgreSQL
-docker-compose -f docker-compose-raspberry.yml logs postgres
-
-# Reiniciar tudo
-docker-compose -f docker-compose-raspberry.yml down
-./scripts/start-app-raspberry.sh
-```
-
-**PostgreSQL demora para ficar pronto (timeout):**
-```bash
-# Usar versao simplificada (sem healthcheck dependencies)
-chmod +x scripts/start-app-raspberry-simple.sh
-./scripts/start-app-raspberry-simple.sh
-
-# Ou verificar logs detalhados
-docker-compose -f docker-compose-raspberry.yml logs postgres
-
-# Verificar status do container
-docker ps --filter "name=cadastro_banco"
-
-# Testar conexao manual
-docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db
-```
-
-**Erro "Container is unhealthy" ou "Restarting":**
-```bash
-# Versao ultra leve (PostgreSQL 11) - RECOMENDADO para Raspberry Pi
-chmod +x scripts/start-app-raspberry-light.sh
-./scripts/start-app-raspberry-light.sh
-
-# Ou use a versao simplificada (PostgreSQL 12):
-chmod +x scripts/start-app-raspberry-simple.sh
-./scripts/start-app-raspberry-simple.sh
-
-# Ou use a versao principal (PostgreSQL 12):
-./scripts/start-app-raspberry.sh
-
-# Se ainda der erro, verifique logs:
-docker-compose -f docker-compose-raspberry-light.yml logs postgres
-```
-
-**Problemas de Memória:**
-```bash
-# Aumente o swap
+# Aumentar swap se necessário
 sudo dphys-swapfile swapoff
 sudo nano /etc/dphys-swapfile
 # Altere CONF_SWAPSIZE=100 para CONF_SWAPSIZE=1024
 sudo dphys-swapfile setup
 sudo dphys-swapfile swapon
-
-# Monitore o uso de memória
-htop
 ```
-
-**Problemas de Rede:**
-```bash
-# Verifique as portas
-netstat -tulpn | grep -E ':(8503|5000|5436)'
-
-# Teste a conectividade
-curl http://localhost:8503
-curl http://localhost:5000
-```
-
-#### **Especificações Técnicas Raspberry Pi**
-
-- **Arquitetura**: ARM64 (Raspberry Pi 4/5)
-- **Sistema Operacional**: Ubuntu 20.04+ ou Raspberry Pi OS
-- **Docker**: 20.10+
-- **Docker Compose**: 1.29.2+
-- **Memória recomendada**: 4GB+ RAM
-- **Armazenamento**: 10GB+ livre
 
 ### **Execução Manual**
 ```bash

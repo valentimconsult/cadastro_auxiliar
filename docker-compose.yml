@@ -4,7 +4,7 @@
 version: '3.8'
 
 services:
-  # Servico PostgreSQL
+  # Servico PostgreSQL - Otimizado para Desktop e Raspberry Pi
   postgres:
     image: postgres:15-alpine
     container_name: cadastro_banco
@@ -13,6 +13,17 @@ services:
       POSTGRES_USER: cadastro_user
       POSTGRES_PASSWORD: cadastro_password
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+      # Configuracoes otimizadas para Raspberry Pi (compativel com desktop)
+      POSTGRES_SHARED_BUFFERS: "256MB"
+      POSTGRES_EFFECTIVE_CACHE_SIZE: "1GB"
+      POSTGRES_MAINTENANCE_WORK_MEM: "128MB"
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: "0.9"
+      POSTGRES_WAL_BUFFERS: "32MB"
+      POSTGRES_DEFAULT_STATISTICS_TARGET: "100"
+      POSTGRES_MAX_CONNECTIONS: "50"
+      # Configuracoes de performance
+      POSTGRES_RANDOM_PAGE_COST: "1.1"
+      POSTGRES_EFFECTIVE_IO_CONCURRENCY: "2"
     ports:
       - "5436:5432"
     volumes:
@@ -22,12 +33,13 @@ services:
     restart: unless-stopped
     networks:
       - cadastro-network
+    # Healthcheck simplificado
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db -h localhost"]
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 20s
 
   cadastro-app:
     build:
@@ -57,8 +69,7 @@ services:
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
 
   api-server:
     build:
@@ -86,8 +97,7 @@ services:
     networks:
       - cadastro-network
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
 
 volumes:
   postgres_data:
