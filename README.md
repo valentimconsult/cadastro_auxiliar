@@ -191,18 +191,21 @@ docker ps --filter "name=cadastro_banco"
 docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db
 ```
 
-**Erro "Container is unhealthy":**
+**Erro "Container is unhealthy" ou "Restarting":**
 ```bash
-# Este erro foi corrigido - healthcheck removido
-# Use o script atualizado:
-./scripts/start-app-raspberry.sh
+# Versao ultra leve (PostgreSQL 11) - RECOMENDADO para Raspberry Pi
+chmod +x scripts/start-app-raspberry-light.sh
+./scripts/start-app-raspberry-light.sh
 
-# Ou use a versao simplificada:
+# Ou use a versao simplificada (PostgreSQL 12):
 chmod +x scripts/start-app-raspberry-simple.sh
 ./scripts/start-app-raspberry-simple.sh
 
+# Ou use a versao principal (PostgreSQL 12):
+./scripts/start-app-raspberry.sh
+
 # Se ainda der erro, verifique logs:
-docker-compose -f docker-compose-raspberry.yml logs postgres
+docker-compose -f docker-compose-raspberry-light.yml logs postgres
 ```
 
 **Problemas de Memória:**
