@@ -146,6 +146,23 @@ docker pull postgres:13-alpine
 ./scripts/start-app-raspberry.sh
 ```
 
+**Erro "could not translate host name 'postgres'":**
+```bash
+# Verificar se os containers estão na mesma rede
+docker network ls
+docker network inspect cadastro_auxiliar_cadastro-network
+
+# Verificar se o PostgreSQL está rodando
+docker ps | grep postgres
+
+# Verificar logs do PostgreSQL
+docker-compose -f docker-compose-raspberry.yml logs postgres
+
+# Reiniciar tudo
+docker-compose -f docker-compose-raspberry.yml down
+./scripts/start-app-raspberry.sh
+```
+
 **Problemas de Memória:**
 ```bash
 # Aumente o swap

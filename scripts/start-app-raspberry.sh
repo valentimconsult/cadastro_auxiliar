@@ -33,7 +33,36 @@ docker system prune -f 2>/dev/null
 echo "Construindo e iniciando containers..."
 echo "Isso pode levar alguns minutos na primeira execucao..."
 
-if docker-compose -f docker-compose-raspberry.yml up --build -d; then
+# Iniciar PostgreSQL primeiro
+echo "Iniciando PostgreSQL..."
+if ! docker-compose -f docker-compose-raspberry.yml up -d postgres; then
+    echo "ERRO: Falha ao iniciar PostgreSQL."
+    exit 1
+fi
+
+# Aguardar PostgreSQL estar pronto
+echo "Aguardando PostgreSQL estar pronto..."
+max_attempts=30
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db >/dev/null 2>&1; then
+        echo "PostgreSQL esta pronto!"
+        break
+    fi
+    echo "Aguardando PostgreSQL... (tentativa $((attempt + 1))/$max_attempts)"
+    sleep 5
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -eq $max_attempts ]; then
+    echo "ERRO: PostgreSQL nao ficou pronto a tempo."
+    echo "Verifique os logs: docker-compose -f docker-compose-raspberry.yml logs postgres"
+    exit 1
+fi
+
+# Iniciar os outros containers
+echo "Iniciando aplicacao e API..."
+if docker-compose -f docker-compose-raspberry.yml up --build -d cadastro-app api-server; then
     echo "=== Aplicacao iniciada com sucesso! ==="
     echo ""
     echo "Acesse a aplicacao em:"

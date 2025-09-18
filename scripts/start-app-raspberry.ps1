@@ -36,7 +36,42 @@ Write-Host "Construindo e iniciando containers..." -ForegroundColor Yellow
 Write-Host "Isso pode levar alguns minutos na primeira execucao..." -ForegroundColor Cyan
 
 try {
-    docker-compose -f docker-compose-raspberry.yml up --build -d
+    # Iniciar PostgreSQL primeiro
+    Write-Host "Iniciando PostgreSQL..." -ForegroundColor Yellow
+    docker-compose -f docker-compose-raspberry.yml up -d postgres
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERRO: Falha ao iniciar PostgreSQL." -ForegroundColor Red
+        exit 1
+    }
+    
+    # Aguardar PostgreSQL estar pronto
+    Write-Host "Aguardando PostgreSQL estar pronto..." -ForegroundColor Yellow
+    $maxAttempts = 30
+    $attempt = 0
+    $postgresReady = $false
+    
+    while ($attempt -lt $maxAttempts) {
+        $result = docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "PostgreSQL esta pronto!" -ForegroundColor Green
+            $postgresReady = $true
+            break
+        }
+        Write-Host "Aguardando PostgreSQL... (tentativa $($attempt + 1)/$maxAttempts)" -ForegroundColor Cyan
+        Start-Sleep -Seconds 5
+        $attempt++
+    }
+    
+    if (-not $postgresReady) {
+        Write-Host "ERRO: PostgreSQL nao ficou pronto a tempo." -ForegroundColor Red
+        Write-Host "Verifique os logs: docker-compose -f docker-compose-raspberry.yml logs postgres" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    # Iniciar os outros containers
+    Write-Host "Iniciando aplicacao e API..." -ForegroundColor Yellow
+    docker-compose -f docker-compose-raspberry.yml up --build -d cadastro-app api-server
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "=== Aplicacao iniciada com sucesso! ===" -ForegroundColor Green
