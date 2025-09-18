@@ -3,6 +3,25 @@
 
 Write-Host "=== Iniciando Cadastro Auxiliar no Raspberry Pi ===" -ForegroundColor Green
 
+# Detectar diretorio do script e navegar para o diretorio do projeto
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectDir = Split-Path -Parent $ScriptDir
+$DockerComposeFile = Join-Path $ProjectDir "docker-compose-raspberry.yml"
+
+Write-Host "Diretorio do projeto: $ProjectDir" -ForegroundColor Cyan
+Write-Host "Arquivo docker-compose: $DockerComposeFile" -ForegroundColor Cyan
+
+# Verificar se o arquivo docker-compose existe
+if (-not (Test-Path $DockerComposeFile)) {
+    Write-Host "ERRO: Arquivo docker-compose-raspberry.yml nao encontrado em: $DockerComposeFile" -ForegroundColor Red
+    Write-Host "Certifique-se de que esta executando o script do diretorio correto." -ForegroundColor Red
+    exit 1
+}
+
+# Navegar para o diretorio do projeto
+Set-Location $ProjectDir
+Write-Host "Trabalhando no diretorio: $(Get-Location)" -ForegroundColor Cyan
+
 # Verificar se o Docker esta rodando
 Write-Host "Verificando Docker..." -ForegroundColor Yellow
 try {
@@ -25,7 +44,7 @@ try {
 
 # Parar containers existentes
 Write-Host "Parando containers existentes..." -ForegroundColor Yellow
-docker-compose -f docker-compose-raspberry.yml down 2>$null
+docker-compose -f $DockerComposeFile down 2>$null
 
 # Limpar imagens antigas (opcional)
 Write-Host "Limpando imagens antigas..." -ForegroundColor Yellow
@@ -38,7 +57,7 @@ Write-Host "Isso pode levar alguns minutos na primeira execucao..." -ForegroundC
 try {
     # Iniciar PostgreSQL primeiro
     Write-Host "Iniciando PostgreSQL..." -ForegroundColor Yellow
-    docker-compose -f docker-compose-raspberry.yml up -d postgres
+    docker-compose -f $DockerComposeFile up -d postgres
     
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERRO: Falha ao iniciar PostgreSQL." -ForegroundColor Red
@@ -65,13 +84,13 @@ try {
     
     if (-not $postgresReady) {
         Write-Host "ERRO: PostgreSQL nao ficou pronto a tempo." -ForegroundColor Red
-        Write-Host "Verifique os logs: docker-compose -f docker-compose-raspberry.yml logs postgres" -ForegroundColor Yellow
+        Write-Host "Verifique os logs: docker-compose -f $DockerComposeFile logs postgres" -ForegroundColor Yellow
         exit 1
     }
     
     # Iniciar os outros containers
     Write-Host "Iniciando aplicacao e API..." -ForegroundColor Yellow
-    docker-compose -f docker-compose-raspberry.yml up --build -d cadastro-app api-server
+    docker-compose -f $DockerComposeFile up --build -d cadastro-app api-server
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "=== Aplicacao iniciada com sucesso! ===" -ForegroundColor Green
@@ -82,13 +101,13 @@ try {
         Write-Host "  PostgreSQL: localhost:5436" -ForegroundColor White
         Write-Host ""
         Write-Host "Para ver os logs:" -ForegroundColor Cyan
-        Write-Host "  docker-compose -f docker-compose-raspberry.yml logs -f" -ForegroundColor White
+        Write-Host "  docker-compose -f $DockerComposeFile logs -f" -ForegroundColor White
         Write-Host ""
         Write-Host "Para parar a aplicacao:" -ForegroundColor Cyan
-        Write-Host "  docker-compose -f docker-compose-raspberry.yml down" -ForegroundColor White
+        Write-Host "  docker-compose -f $DockerComposeFile down" -ForegroundColor White
     } else {
         Write-Host "ERRO: Falha ao iniciar a aplicacao." -ForegroundColor Red
-        Write-Host "Verifique os logs com: docker-compose -f docker-compose-raspberry.yml logs" -ForegroundColor Yellow
+        Write-Host "Verifique os logs com: docker-compose -f $DockerComposeFile logs" -ForegroundColor Yellow
         exit 1
     }
 } catch {

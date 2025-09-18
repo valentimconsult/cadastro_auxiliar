@@ -68,11 +68,23 @@ chmod +x scripts/start-app-postgres.sh
 
 ### **Raspberry Pi (Ubuntu/Linux ARM64)**
 ```bash
+# Navegar para o diretório do projeto
+cd caminho/para/seu/projeto/cadastro_auxiliar
+
 # Dar permissão de execução
 chmod +x scripts/start-app-raspberry.sh
 
 # Executar (versão otimizada para Raspberry Pi)
 ./scripts/start-app-raspberry.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+# Navegar para o diretório do projeto
+cd "caminho\para\seu\projeto\cadastro_auxiliar"
+
+# Executar
+.\scripts\start-app-raspberry.ps1
 ```
 
 > **📌 Nota para Raspberry Pi**: Use o arquivo `docker-compose-raspberry.yml` e o script `start-app-raspberry.sh` para melhor compatibilidade.
