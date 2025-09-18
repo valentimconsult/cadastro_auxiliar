@@ -64,11 +64,31 @@ echo "Aguardando PostgreSQL estar pronto..."
 max_attempts=30
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
+    # Verificar se o container está rodando
+    if ! docker ps | grep -q "cadastro_banco"; then
+        echo "ERRO: Container cadastro_banco nao esta rodando!"
+        echo "Verificando logs do PostgreSQL:"
+        docker-compose -f "$DOCKER_COMPOSE_FILE" logs postgres
+        exit 1
+    fi
+    
+    # Tentar conectar com PostgreSQL
     if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db >/dev/null 2>&1; then
         echo "PostgreSQL esta pronto!"
         break
     fi
+    
+    # Mostrar status do container
     echo "Aguardando PostgreSQL... (tentativa $((attempt + 1))/$max_attempts)"
+    echo "Status do container:"
+    docker ps --filter "name=cadastro_banco" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    
+    # Verificar logs se estiver demorando muito
+    if [ $attempt -eq 5 ] || [ $attempt -eq 15 ]; then
+        echo "Logs do PostgreSQL (ultimas 10 linhas):"
+        docker-compose -f "$DOCKER_COMPOSE_FILE" logs --tail=10 postgres
+    fi
+    
     sleep 5
     attempt=$((attempt + 1))
 done

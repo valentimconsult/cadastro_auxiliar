@@ -175,6 +175,22 @@ docker-compose -f docker-compose-raspberry.yml down
 ./scripts/start-app-raspberry.sh
 ```
 
+**PostgreSQL demora para ficar pronto (timeout):**
+```bash
+# Usar versao simplificada (sem healthcheck dependencies)
+chmod +x scripts/start-app-raspberry-simple.sh
+./scripts/start-app-raspberry-simple.sh
+
+# Ou verificar logs detalhados
+docker-compose -f docker-compose-raspberry.yml logs postgres
+
+# Verificar status do container
+docker ps --filter "name=cadastro_banco"
+
+# Testar conexao manual
+docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db
+```
+
 **Problemas de Memória:**
 ```bash
 # Aumente o swap
