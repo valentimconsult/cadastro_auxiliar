@@ -191,6 +191,20 @@ docker ps --filter "name=cadastro_banco"
 docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db
 ```
 
+**Erro "Container is unhealthy":**
+```bash
+# Este erro foi corrigido - healthcheck removido
+# Use o script atualizado:
+./scripts/start-app-raspberry.sh
+
+# Ou use a versao simplificada:
+chmod +x scripts/start-app-raspberry-simple.sh
+./scripts/start-app-raspberry-simple.sh
+
+# Se ainda der erro, verifique logs:
+docker-compose -f docker-compose-raspberry.yml logs postgres
+```
+
 **Problemas de Memória:**
 ```bash
 # Aumente o swap

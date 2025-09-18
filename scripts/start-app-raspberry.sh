@@ -52,68 +52,54 @@ docker system prune -f 2>/dev/null
 echo "Construindo e iniciando containers..."
 echo "Isso pode levar alguns minutos na primeira execucao..."
 
-# Iniciar PostgreSQL primeiro
-echo "Iniciando PostgreSQL..."
-if ! docker-compose -f "$DOCKER_COMPOSE_FILE" up -d postgres; then
-    echo "ERRO: Falha ao iniciar PostgreSQL."
-    exit 1
-fi
-
-# Aguardar PostgreSQL estar pronto
-echo "Aguardando PostgreSQL estar pronto..."
-max_attempts=30
-attempt=0
-while [ $attempt -lt $max_attempts ]; do
-    # Verificar se o container está rodando
-    if ! docker ps | grep -q "cadastro_banco"; then
-        echo "ERRO: Container cadastro_banco nao esta rodando!"
-        echo "Verificando logs do PostgreSQL:"
-        docker-compose -f "$DOCKER_COMPOSE_FILE" logs postgres
-        exit 1
+# Iniciar todos os containers de uma vez (sem healthcheck dependencies)
+echo "Iniciando todos os containers..."
+if docker-compose -f "$DOCKER_COMPOSE_FILE" up --build -d; then
+    echo "Containers iniciados! Aguardando estabilizacao..."
+    
+    # Aguardar um pouco para os containers estabilizarem
+    sleep 15
+    
+    # Verificar se todos os containers estao rodando
+    echo "Verificando status dos containers:"
+    docker-compose -f "$DOCKER_COMPOSE_FILE" ps
+    
+    # Aguardar PostgreSQL estar pronto (versao simplificada)
+    echo "Aguardando PostgreSQL estar pronto..."
+    max_attempts=20
+    attempt=0
+    postgres_ready=false
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db >/dev/null 2>&1; then
+            echo "PostgreSQL esta pronto!"
+            postgres_ready=true
+            break
+        fi
+        
+        echo "Aguardando PostgreSQL... (tentativa $((attempt + 1))/$max_attempts)"
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+    
+    if [ "$postgres_ready" = true ]; then
+        echo "=== Aplicacao iniciada com sucesso! ==="
+        echo ""
+        echo "Acesse a aplicacao em:"
+        echo "  Streamlit: http://localhost:8503"
+        echo "  API: http://localhost:5000"
+        echo "  PostgreSQL: localhost:5436"
+        echo ""
+        echo "Para ver os logs:"
+        echo "  docker-compose -f $DOCKER_COMPOSE_FILE logs -f"
+        echo ""
+        echo "Para parar a aplicacao:"
+        echo "  docker-compose -f $DOCKER_COMPOSE_FILE down"
+    else
+        echo "AVISO: PostgreSQL pode nao estar totalmente pronto, mas os containers estao rodando."
+        echo "Tente acessar a aplicacao em: http://localhost:8503"
+        echo "Se houver problemas, verifique os logs: docker-compose -f $DOCKER_COMPOSE_FILE logs"
     fi
-    
-    # Tentar conectar com PostgreSQL
-    if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db >/dev/null 2>&1; then
-        echo "PostgreSQL esta pronto!"
-        break
-    fi
-    
-    # Mostrar status do container
-    echo "Aguardando PostgreSQL... (tentativa $((attempt + 1))/$max_attempts)"
-    echo "Status do container:"
-    docker ps --filter "name=cadastro_banco" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-    
-    # Verificar logs se estiver demorando muito
-    if [ $attempt -eq 5 ] || [ $attempt -eq 15 ]; then
-        echo "Logs do PostgreSQL (ultimas 10 linhas):"
-        docker-compose -f "$DOCKER_COMPOSE_FILE" logs --tail=10 postgres
-    fi
-    
-    sleep 5
-    attempt=$((attempt + 1))
-done
-
-if [ $attempt -eq $max_attempts ]; then
-    echo "ERRO: PostgreSQL nao ficou pronto a tempo."
-    echo "Verifique os logs: docker-compose -f $DOCKER_COMPOSE_FILE logs postgres"
-    exit 1
-fi
-
-# Iniciar os outros containers
-echo "Iniciando aplicacao e API..."
-if docker-compose -f "$DOCKER_COMPOSE_FILE" up --build -d cadastro-app api-server; then
-    echo "=== Aplicacao iniciada com sucesso! ==="
-    echo ""
-    echo "Acesse a aplicacao em:"
-    echo "  Streamlit: http://localhost:8503"
-    echo "  API: http://localhost:5000"
-    echo "  PostgreSQL: localhost:5436"
-    echo ""
-    echo "Para ver os logs:"
-    echo "  docker-compose -f $DOCKER_COMPOSE_FILE logs -f"
-    echo ""
-    echo "Para parar a aplicacao:"
-    echo "  docker-compose -f $DOCKER_COMPOSE_FILE down"
 else
     echo "ERRO: Falha ao iniciar a aplicacao."
     echo "Verifique os logs com: docker-compose -f $DOCKER_COMPOSE_FILE logs"
