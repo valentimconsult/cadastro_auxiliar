@@ -1571,7 +1571,7 @@ def page_manage_users() -> None:
         return
     
     # Tabs para diferentes funcionalidades
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Usuários", "Permissões", "Permissões Gerais", "Adicionar Usuário", "PostgreSQL Grants"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Usuários", "Permissões", "Permissões Gerais", "Adicionar Usuário", "Alterar Senhas", "PostgreSQL Grants"])
     
     with tab1:
         st.subheader("Usuários cadastrados")
@@ -1712,6 +1712,48 @@ def page_manage_users() -> None:
                     st.rerun()
     
     with tab5:
+        st.subheader("Alterar Senhas")
+        users = load_users()
+        
+        if len(users) > 0:
+            # Selecionar usuário
+            selected_user = st.selectbox(
+                "Selecionar usuário para alterar senha:",
+                options=list(users.keys()),
+                key="change_password_user"
+            )
+            
+            if selected_user:
+                st.info(f"Alterando senha para: **{selected_user}**")
+                
+                with st.form(key="change_password_form"):
+                    current_password = st.text_input("Senha atual", type="password", help="Digite a senha atual para confirmar")
+                    new_password = st.text_input("Nova senha", type="password", help="Digite a nova senha")
+                    confirm_password = st.text_input("Confirmar nova senha", type="password", help="Digite novamente a nova senha")
+                    
+                    submitted = st.form_submit_button("Alterar Senha")
+                    
+                    if submitted:
+                        if not current_password or not new_password or not confirm_password:
+                            st.error("Todos os campos são obrigatórios.")
+                        elif new_password != confirm_password:
+                            st.error("As novas senhas não conferem.")
+                        elif len(new_password) < 4:
+                            st.error("A nova senha deve ter pelo menos 4 caracteres.")
+                        else:
+                            # Verificar senha atual
+                            if users[selected_user]["password"] == hash_password(current_password):
+                                # Atualizar senha
+                                users[selected_user]["password"] = hash_password(new_password)
+                                save_users(users)
+                                st.success(f"Senha alterada com sucesso para {selected_user}!")
+                                st.rerun()
+                            else:
+                                st.error("Senha atual incorreta.")
+        else:
+            st.info("Nenhum usuário encontrado.")
+    
+    with tab6:
         st.subheader("Gerenciamento de Usuários PostgreSQL")
         manage_postgresql_grants()
 

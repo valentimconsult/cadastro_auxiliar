@@ -54,7 +54,7 @@ Sistema completo de gerenciamento de cadastros auxiliares desenvolvido em Stream
 ```powershell
 # Executar como Administrador
 cd "caminho\para\seu\projeto\cadastro_auxiliar"
-.\scripts\start-app-postgres.ps1
+docker-compose up --build -d
 ```
 
 ### **Linux/Mac (Terminal) - Unificado**
@@ -199,8 +199,7 @@ docker exec -it cadastro_banco psql -U cadastro_user -d cadastro_db
 ```
 cadastro_auxiliar/
 ├── 📁 scripts/                    # Scripts de inicialização
-│   ├── start-app-postgres.ps1     # Windows
-│   └── start-app-postgres.sh      # Linux/Mac
+│   └── start-app-linux.sh         # Linux/Mac (unificado)
 ├── 📁 database/                   # Configurações do banco
 │   ├── db_config.py               # Conexão PostgreSQL
 │   ├── grants_manager.py          # Gerenciamento de permissões
@@ -256,7 +255,16 @@ chmod +x scripts/*.sh
 #### **Erro de Login - Coluna "status" não existe**
 Se você receber o erro `column "status" does not exist` ao tentar fazer login:
 
-**Solução:**
+**Solução Rápida:**
+```bash
+# Linux/Mac
+docker exec -i cadastro_banco psql -U cadastro_user -d cadastro_db -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')); UPDATE users SET status = 'ativo' WHERE status IS NULL;"
+
+# Windows (PowerShell)
+docker exec -i cadastro_banco psql -U cadastro_user -d cadastro_db -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')); UPDATE users SET status = 'ativo' WHERE status IS NULL;"
+```
+
+**Solução Manual:**
 ```bash
 # Conectar ao PostgreSQL
 docker exec -it cadastro_banco psql -U cadastro_user -d cadastro_db
