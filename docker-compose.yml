@@ -5,6 +5,7 @@ version: '3.8'
 
 services:
   # Servico PostgreSQL - Otimizado para Desktop e Raspberry Pi
+  # Configurado para acesso externo via Cloudflare Tunnel
   postgres:
     image: postgres:15-alpine
     container_name: cadastro_banco
@@ -20,19 +21,47 @@ services:
       POSTGRES_CHECKPOINT_COMPLETION_TARGET: "0.9"
       POSTGRES_WAL_BUFFERS: "32MB"
       POSTGRES_DEFAULT_STATISTICS_TARGET: "100"
-      POSTGRES_MAX_CONNECTIONS: "50"
+      POSTGRES_MAX_CONNECTIONS: "100"
       # Configuracoes de performance
       POSTGRES_RANDOM_PAGE_COST: "1.1"
       POSTGRES_EFFECTIVE_IO_CONCURRENCY: "2"
+      # Configuracoes para acesso externo
+      POSTGRES_HOST_AUTH_METHOD: "md5"
     ports:
       - "5436:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
       - ./database/backups:/backups:rw
+      # Configuracoes para acesso externo
+      - ./database/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./database/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     restart: unless-stopped
     networks:
       - cadastro-network
+    # Comando personalizado para usar configuracoes externas
+    command: >
+      postgres 
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c hba_file=/etc/postgresql/pg_hba.conf
+      -c listen_addresses='*'
+      -c port=5432
+      -c max_connections=100
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=32MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=2
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_statement=all
+      -c log_line_prefix='%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+      -c log_min_duration_statement=1000
+      -c log_checkpoints=on
+      -c log_lock_waits=on
     # Healthcheck simplificado
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cadastro_user -d cadastro_db -h localhost"]

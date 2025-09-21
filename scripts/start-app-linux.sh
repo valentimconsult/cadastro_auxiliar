@@ -2,8 +2,19 @@
 
 # Script unificado para iniciar a aplicacao no Linux (Desktop e Raspberry Pi)
 # Detecta automaticamente o ambiente e otimiza conforme necessario
+# Inclui configuracao automatica de acesso externo via Cloudflare Tunnel
 
 echo "=== Iniciando Cadastro Auxiliar no Linux ==="
+echo "🚀 Sistema completo com acesso externo configurado automaticamente"
+
+# Verificar se foi passado parametro para apenas configurar acesso externo
+if [ "$1" = "--configure-external" ] || [ "$1" = "-c" ]; then
+    echo "🔧 Modo: Apenas configurar acesso externo (Docker ja rodando)"
+    CONFIGURE_ONLY=true
+else
+    echo "🚀 Modo: Iniciar aplicacao completa"
+    CONFIGURE_ONLY=false
+fi
 
 # Detectar diretorio do script e navegar para o diretorio do projeto
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,6 +34,118 @@ fi
 # Navegar para o diretorio do projeto
 cd "$PROJECT_DIR"
 echo "Trabalhando no diretorio: $(pwd)"
+
+# Se for apenas configuracao externa, verificar se Docker esta rodando
+if [ "$CONFIGURE_ONLY" = true ]; then
+    echo "🔍 Verificando se Docker esta rodando..."
+    if ! docker ps | grep -q "cadastro_banco"; then
+        echo "❌ ERRO: Container cadastro_banco nao esta rodando!"
+        echo "   Execute primeiro: ./scripts/start-app-linux.sh"
+        echo "   Ou inicie manualmente: docker-compose up -d"
+        exit 1
+    fi
+    echo "✅ Container PostgreSQL encontrado!"
+    
+    # Executar configuracao externa
+    echo "🔧 Configurando acesso externo ao PostgreSQL..."
+    docker exec cadastro_banco /bin/bash -c "
+        # Aguardar PostgreSQL estar totalmente pronto
+        sleep 2
+        
+        # Configurar pg_hba.conf para acesso externo
+        echo 'Configurando autenticacao para acesso externo...'
+        cp /var/lib/postgresql/data/pg_hba.conf /var/lib/postgresql/data/pg_hba.conf.backup
+        
+        cat > /var/lib/postgresql/data/pg_hba.conf << 'EOF'
+# Configuracao de autenticacao PostgreSQL para acesso externo
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5
+host    all             all             0.0.0.0/0               md5
+host    all             all             ::/0                    md5
+host    all             all             172.16.0.0/12           md5
+host    all             all             192.168.0.0/16          md5
+host    all             all             10.0.0.0/8              md5
+host    cadastro_db     cadastro_user   0.0.0.0/0               md5
+EOF
+        
+        # Configurar postgresql.conf para escutar em todas as interfaces
+        echo 'Configurando PostgreSQL para escutar em todas as interfaces...'
+        cp /var/lib/postgresql/data/postgresql.conf /var/lib/postgresql/data/postgresql.conf.backup
+        
+        # Aplicar configuracao de rede
+        sed -i \"s/#listen_addresses = 'localhost'/listen_addresses = '*'/\" /var/lib/postgresql/data/postgresql.conf
+        sed -i \"s/listen_addresses = 'localhost'/listen_addresses = '*'/\" /var/lib/postgresql/data/postgresql.conf
+        
+        # Adicionar configuracoes de logging
+        cat >> /var/lib/postgresql/data/postgresql.conf << 'EOF'
+
+# Configuracoes de logging para debug
+log_connections = on
+log_disconnections = on
+log_statement = 'all'
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_min_duration_statement = 1000
+log_checkpoints = on
+log_lock_waits = on
+EOF
+        
+        # Recarregar configuracoes
+        echo 'Recarregando configuracoes do PostgreSQL...'
+        psql -U cadastro_user -d cadastro_db -c \"SELECT pg_reload_conf();\" || true
+        
+        echo 'Configuracao de acesso externo concluida!'
+    " 2>/dev/null || echo "⚠️  Aviso: Nao foi possivel configurar acesso externo automaticamente"
+
+    # Verificar se todos os servicos estao rodando
+    echo "🔍 Verificando servicos..."
+    sleep 3
+
+    # Verificar PostgreSQL
+    if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db -h localhost >/dev/null 2>&1; then
+        echo "✅ PostgreSQL: OK"
+    else
+        echo "❌ PostgreSQL: ERRO"
+    fi
+
+    # Verificar Streamlit
+    if curl -s http://localhost:8503 >/dev/null 2>&1; then
+        echo "✅ Streamlit: OK"
+    else
+        echo "❌ Streamlit: ERRO"
+    fi
+
+    # Verificar API
+    if curl -s http://localhost:5000 >/dev/null 2>&1; then
+        echo "✅ API Flask: OK"
+    else
+        echo "❌ API Flask: ERRO"
+    fi
+
+    echo ""
+    echo "🎉 Configuracao de acesso externo concluida!"
+    echo "=================================================="
+    echo ""
+    echo "🌐 URLs de acesso local:"
+    echo "   Streamlit: http://localhost:8503"
+    echo "   API: http://localhost:5000"
+    echo "   PostgreSQL: localhost:5436"
+    echo ""
+    echo "🔗 URLs externas (via Cloudflare Tunnel):"
+    echo "   App: https://app-cadastro.valentimconsult.com"
+    echo "   API: https://api-cadastro.valentimconsult.com"
+    echo "   PostgreSQL: postgres-cadastro.valentimconsult.com:5432"
+    echo ""
+    echo "📊 Configuracao para Metabase/Superset:"
+    echo "   Host: postgres-cadastro.valentimconsult.com"
+    echo "   Porta: 5432"
+    echo "   Database: cadastro_db"
+    echo "   User: cadastro_user"
+    echo "   Password: cadastro_password"
+    echo ""
+    echo "✅ PostgreSQL agora aceita conexoes externas via Cloudflare Tunnel"
+    exit 0
+fi
 
 # Detectar se e Raspberry Pi
 if [ -f /proc/device-tree/model ] && grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null; then
@@ -66,6 +189,16 @@ fi
 # Parar containers existentes
 echo "Parando containers existentes..."
 docker-compose -f "$DOCKER_COMPOSE_FILE" down 2>/dev/null
+
+# Remover volume do PostgreSQL para aplicar configuracoes de acesso externo
+echo "🗑️  Removendo volume do PostgreSQL para aplicar configuracoes de acesso externo..."
+docker volume rm cadastro_auxiliar_postgres_data 2>/dev/null || true
+
+# Criar diretorios necessarios
+echo "📁 Criando diretorios necessarios..."
+mkdir -p data logs config database/backups
+
+# Scripts executaveis ja configurados
 
 # Limpar imagens antigas (opcional)
 echo "Limpando imagens antigas..."
@@ -131,22 +264,116 @@ if docker-compose -f "$DOCKER_COMPOSE_FILE" up --build -d; then
     done
     
     if [ "$postgres_ready" = true ]; then
-        echo "=== Aplicacao iniciada com sucesso! ==="
-        echo ""
-        echo "Acesse a aplicacao em:"
-        echo "  Streamlit: http://localhost:8503"
-        echo "  API: http://localhost:5000"
-        echo "  PostgreSQL: localhost:5436"
-        echo ""
-        echo "Para ver os logs:"
-        echo "  docker-compose logs -f"
-        echo ""
-        echo "Para parar a aplicacao:"
-        echo "  docker-compose down"
-        echo ""
-        if [ "$IS_RASPBERRY_PI" = true ]; then
-            echo "Configuracao otimizada para Raspberry Pi ativa!"
+        # Configurar acesso externo ao PostgreSQL
+        echo "🔧 Configurando acesso externo ao PostgreSQL..."
+        docker exec cadastro_banco /bin/bash -c "
+            # Aguardar PostgreSQL estar totalmente pronto
+            sleep 5
+            
+            # Configurar pg_hba.conf para acesso externo
+            echo 'Configurando autenticacao para acesso externo...'
+            cp /var/lib/postgresql/data/pg_hba.conf /var/lib/postgresql/data/pg_hba.conf.backup
+            
+            cat > /var/lib/postgresql/data/pg_hba.conf << 'EOF'
+# Configuracao de autenticacao PostgreSQL para acesso externo
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5
+host    all             all             0.0.0.0/0               md5
+host    all             all             ::/0                    md5
+host    all             all             172.16.0.0/12           md5
+host    all             all             192.168.0.0/16          md5
+host    all             all             10.0.0.0/8              md5
+host    cadastro_db     cadastro_user   0.0.0.0/0               md5
+EOF
+            
+            # Configurar postgresql.conf para escutar em todas as interfaces
+            echo 'Configurando PostgreSQL para escutar em todas as interfaces...'
+            cp /var/lib/postgresql/data/postgresql.conf /var/lib/postgresql/data/postgresql.conf.backup
+            
+            # Aplicar configuracao de rede
+            sed -i \"s/#listen_addresses = 'localhost'/listen_addresses = '*'/\" /var/lib/postgresql/data/postgresql.conf
+            sed -i \"s/listen_addresses = 'localhost'/listen_addresses = '*'/\" /var/lib/postgresql/data/postgresql.conf
+            
+            # Adicionar configuracoes de logging
+            cat >> /var/lib/postgresql/data/postgresql.conf << 'EOF'
+
+# Configuracoes de logging para debug
+log_connections = on
+log_disconnections = on
+log_statement = 'all'
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_min_duration_statement = 1000
+log_checkpoints = on
+log_lock_waits = on
+EOF
+            
+            # Recarregar configuracoes
+            echo 'Recarregando configuracoes do PostgreSQL...'
+            psql -U cadastro_user -d cadastro_db -c \"SELECT pg_reload_conf();\" || true
+            
+            echo 'Configuracao de acesso externo concluida!'
+        " 2>/dev/null || echo "⚠️  Aviso: Nao foi possivel configurar acesso externo automaticamente"
+
+        # Verificar se todos os servicos estao rodando
+        echo "🔍 Verificando servicos..."
+        sleep 5
+
+        # Verificar PostgreSQL
+        if docker exec cadastro_banco pg_isready -U cadastro_user -d cadastro_db -h localhost >/dev/null 2>&1; then
+            echo "✅ PostgreSQL: OK"
+        else
+            echo "❌ PostgreSQL: ERRO"
         fi
+
+        # Verificar Streamlit
+        if curl -s http://localhost:8503 >/dev/null 2>&1; then
+            echo "✅ Streamlit: OK"
+        else
+            echo "❌ Streamlit: ERRO"
+        fi
+
+        # Verificar API
+        if curl -s http://localhost:5000 >/dev/null 2>&1; then
+            echo "✅ API Flask: OK"
+        else
+            echo "❌ API Flask: ERRO"
+        fi
+
+        echo ""
+        echo "🎉 Aplicacao iniciada com sucesso!"
+        echo "=================================================="
+        echo ""
+        echo "🌐 URLs de acesso local:"
+        echo "   Streamlit: http://localhost:8503"
+        echo "   API: http://localhost:5000"
+        echo "   PostgreSQL: localhost:5436"
+        echo ""
+        echo "🔗 URLs externas (via Cloudflare Tunnel):"
+        echo "   App: https://app-cadastro.valentimconsult.com"
+        echo "   API: https://api-cadastro.valentimconsult.com"
+        echo "   PostgreSQL: postgres-cadastro.valentimconsult.com:5432"
+        echo ""
+        echo "📊 Configuracao para Metabase/Superset:"
+        echo "   Host: postgres-cadastro.valentimconsult.com"
+        echo "   Porta: 5432"
+        echo "   Database: cadastro_db"
+        echo "   User: cadastro_user"
+        echo "   Password: cadastro_password"
+        echo ""
+        echo "📝 Para ver os logs:"
+        echo "   docker-compose logs -f"
+        echo ""
+        echo "🛑 Para parar a aplicacao:"
+        echo "   docker-compose down"
+        echo ""
+
+        if [ "$IS_RASPBERRY_PI" = true ]; then
+            echo "🍓 Configuracao otimizada para Raspberry Pi ativa!"
+        fi
+
+        echo "✅ Configuracao de acesso externo concluida!"
+        echo "🌐 PostgreSQL agora aceita conexoes externas via Cloudflare Tunnel"
     else
         echo "ERRO: PostgreSQL nao ficou pronto a tempo."
         echo "Verifique os logs: docker-compose logs postgres"

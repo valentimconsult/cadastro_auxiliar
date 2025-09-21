@@ -26,6 +26,12 @@ Sistema completo de gerenciamento de cadastros auxiliares desenvolvido em Stream
 - 🏗️ **Sistema de metadados** para controle de estrutura
 - 🏗️ **Backup automático** e persistência de dados
 
+### **Acesso Externo e Integração**
+- 🌐 **Acesso externo via Cloudflare Tunnel** configurado automaticamente
+- 🌐 **Integração com Metabase/Superset** para análise de dados
+- 🌐 **PostgreSQL acessível externamente** via túnel seguro
+- 🌐 **Configuração automática** de permissões de rede
+
 ## 🏗️ **Arquitetura do Sistema**
 
 ```
@@ -65,11 +71,35 @@ cd caminho/para/seu/projeto/cadastro_auxiliar
 # Dar permissão de execução
 chmod +x scripts/start-app-linux.sh
 
-# Executar (detecta automaticamente Desktop ou Raspberry Pi)
+# Opção 1: Iniciar aplicação completa (recomendado)
 ./scripts/start-app-linux.sh
+
+# Opção 2: Apenas configurar acesso externo (Docker já rodando)
+./scripts/start-app-linux.sh --configure-external
+# ou
+./scripts/start-app-linux.sh -c
 ```
 
-> **📌 Nota**: O script detecta automaticamente se está rodando em Raspberry Pi e aplica otimizações específicas. Funciona tanto em desktop quanto em Raspberry Pi com 16GB de RAM.
+> **📌 Nota**: O script detecta automaticamente se está rodando em Raspberry Pi e aplica otimizações específicas. Funciona tanto em desktop quanto em Raspberry Pi com 16GB de RAM. **Inclui configuração automática de acesso externo via Cloudflare Tunnel.**
+
+## 🌐 **Acesso Externo e Integração**
+
+### **URLs de Acesso**
+- **Local**: `http://localhost:8503` (Streamlit)
+- **Local**: `http://localhost:5000` (API)
+- **Externo**: `https://app-cadastro.valentimconsult.com` (via Cloudflare Tunnel)
+- **Externo**: `https://api-cadastro.valentimconsult.com` (via Cloudflare Tunnel)
+
+### **Configuração para Metabase/Superset**
+```
+Host: postgres-cadastro.valentimconsult.com
+Porta: 5432
+Database: cadastro_db
+User: cadastro_user
+Password: cadastro_password
+```
+
+> **🔧 Configuração Automática**: O script configura automaticamente o PostgreSQL para aceitar conexões externas via Cloudflare Tunnel, incluindo autenticação MD5 e logging detalhado para debug.
 
 ### **Troubleshooting**
 
