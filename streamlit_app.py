@@ -697,6 +697,9 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
                 if field['type'] in ['int', 'float']:
                     # Para campos numericos, converter temp para o tipo correto
                     join_conditions.append(f"t.{col} = temp.{col}::{field['type']}")
+                elif field['type'] == 'date':
+                    # Para campos de data, converter temp para DATE
+                    join_conditions.append(f"t.{col} = temp.{col}::DATE")
                 else:
                     # Para campos de texto, comparacao direta
                     join_conditions.append(f"t.{col} = temp.{col}")
@@ -711,13 +714,16 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
             duplicate_count = cursor.fetchone()['duplicate_count']
             
             # Inserir apenas registros não duplicados
-            # Construir SELECT com conversao de tipos para campos numericos
+            # Construir SELECT com conversao de tipos para campos numericos e datas
             select_columns = []
             for i, col in enumerate(column_names):
                 field = fields[i]
                 if field['type'] in ['int', 'float']:
                     # Converter campos numericos da tabela temporaria
                     select_columns.append(f"temp.{col}::{field['type']} as {col}")
+                elif field['type'] == 'date':
+                    # Converter campos de data da tabela temporaria
+                    select_columns.append(f"temp.{col}::DATE as {col}")
                 else:
                     # Campos de texto sem conversao
                     select_columns.append(f"temp.{col}")
