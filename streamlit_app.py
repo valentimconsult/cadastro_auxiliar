@@ -690,9 +690,16 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
             
             # Verificar duplicatas usando JOIN
             # Construir condição de JOIN baseada nas colunas (excluindo ID)
+            # Com conversao de tipos para evitar erro real = text
             join_conditions = []
-            for col in column_names:
-                join_conditions.append(f"t.{col} = temp.{col}")
+            for i, col in enumerate(column_names):
+                field = fields[i]
+                if field['type'] in ['int', 'float']:
+                    # Para campos numericos, converter temp para o tipo correto
+                    join_conditions.append(f"t.{col} = temp.{col}::{field['type']}")
+                else:
+                    # Para campos de texto, comparacao direta
+                    join_conditions.append(f"t.{col} = temp.{col}")
             
             # Contar duplicatas
             count_duplicates_sql = f"""
@@ -704,9 +711,20 @@ def insert_batch_records(table_name: str, fields: list, records: list) -> tuple:
             duplicate_count = cursor.fetchone()['duplicate_count']
             
             # Inserir apenas registros não duplicados
+            # Construir SELECT com conversao de tipos para campos numericos
+            select_columns = []
+            for i, col in enumerate(column_names):
+                field = fields[i]
+                if field['type'] in ['int', 'float']:
+                    # Converter campos numericos da tabela temporaria
+                    select_columns.append(f"temp.{col}::{field['type']} as {col}")
+                else:
+                    # Campos de texto sem conversao
+                    select_columns.append(f"temp.{col}")
+            
             insert_new_sql = f"""
                 INSERT INTO {table_name} ({', '.join(column_names)})
-                SELECT {', '.join(column_names)}
+                SELECT {', '.join(select_columns)}
                 FROM {temp_table} temp
                 WHERE NOT EXISTS (
                     SELECT 1 FROM {table_name} t 
@@ -732,7 +750,7 @@ def generate_template_csv(table_meta: dict) -> str:
     headers = [field['name'] for field in table_meta['fields']]
     df = pd.DataFrame(columns=headers)
     
-    # Add example row
+    # Add example row with better examples
     example_row = {}
     for field in table_meta['fields']:
         if field['type'] == 'text':
@@ -742,11 +760,25 @@ def generate_template_csv(table_meta: dict) -> str:
         elif field['type'] == 'float':
             example_row[field['name']] = 123.45
         elif field['type'] == 'date':
-            example_row[field['name']] = '2024-01-01'
+            example_row[field['name']] = '2024-01-15'  # Formato recomendado
         elif field['type'] == 'bool':
             example_row[field['name']] = 'True'
     
-    df = pd.DataFrame([example_row])
+    # Add second row with alternative examples for dates
+    alternative_row = {}
+    for field in table_meta['fields']:
+        if field['type'] == 'text':
+            alternative_row[field['name']] = 'Segundo exemplo'
+        elif field['type'] == 'int':
+            alternative_row[field['name']] = 456
+        elif field['type'] == 'float':
+            alternative_row[field['name']] = 99.99
+        elif field['type'] == 'date':
+            alternative_row[field['name']] = '15/01/2024'  # Formato alternativo brasileiro
+        elif field['type'] == 'bool':
+            alternative_row[field['name']] = 'False'
+    
+    df = pd.DataFrame([example_row, alternative_row])
     return df.to_csv(index=False, encoding='utf-8')
 
 
@@ -802,7 +834,42 @@ def validate_csv_data(df: pd.DataFrame, table_meta: dict) -> tuple:
                     validated_record[field_name] = None
                 else:
                     validated_record[field_name] = str(value).lower() in ['true', '1', 'sim', 'yes']
-            else:  # text, date
+            elif field['type'] == 'date':
+                if pd.isna(value) or value == '':
+                    validated_record[field_name] = None
+                else:
+                    try:
+                        # Tentar converter diferentes formatos de data
+                        date_str = str(value).strip()
+                        
+                        # Formatos aceitos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
+                        if '/' in date_str:
+                            # Formato DD/MM/YYYY ou MM/DD/YYYY
+                            parts = date_str.split('/')
+                            if len(parts) == 3:
+                                day, month, year = parts
+                                # Assumir formato DD/MM/YYYY (brasileiro)
+                                if len(day) <= 2 and len(month) <= 2 and len(year) == 4:
+                                    validated_record[field_name] = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                                else:
+                                    validated_record[field_name] = date_str
+                            else:
+                                validated_record[field_name] = date_str
+                        elif '-' in date_str and len(date_str.split('-')) == 3:
+                            # Formato YYYY-MM-DD ou DD-MM-YYYY
+                            parts = date_str.split('-')
+                            if len(parts[0]) == 4:  # YYYY-MM-DD
+                                validated_record[field_name] = date_str
+                            else:  # DD-MM-YYYY
+                                day, month, year = parts
+                                validated_record[field_name] = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                        else:
+                            # Tentar parse automático com pandas
+                            parsed_date = pd.to_datetime(date_str)
+                            validated_record[field_name] = parsed_date.strftime('%Y-%m-%d')
+                    except:
+                        row_errors.append(f"Campo '{field_name}' deve ser uma data válida (formato: YYYY-MM-DD, DD/MM/YYYY)")
+            else:  # text
                 validated_record[field_name] = str(value) if not pd.isna(value) else None
         
         if row_errors:
@@ -1112,6 +1179,33 @@ def batch_upload_form(table_meta: dict) -> None:
     """Display a form for batch upload of records via CSV."""
     st.subheader("Carga em lote via CSV")
     
+    # Mostrar guia de formatos de dados
+    with st.expander("📋 Guia de Formatos de Dados", expanded=False):
+        st.markdown("""
+        **Formatos aceitos para cada tipo de campo:**
+        
+        **📝 Texto (text):**
+        - Qualquer texto: `"João Silva"`, `"Produto ABC"`, `"Descrição qualquer"`
+        
+        **🔢 Número Inteiro (int):**
+        - Apenas números inteiros: `123`, `456`, `0`, `-10`
+        - ❌ Não use: `123.45`, `"123"`, `abc`
+        
+        **💰 Número Decimal (float):**
+        - Números com ou sem decimais: `123.45`, `100`, `0.99`, `-5.5`
+        - Use ponto (.) como separador decimal: `123.45` ✅
+        - ❌ Não use: `123,45` (vírgula), `"123.45"` (aspas)
+        
+        **📅 Data (date):**
+        - Formato recomendado: `2024-01-15` (YYYY-MM-DD)
+        - Formatos aceitos: `17/06/2025`, `2025-06-17`, `15/01/2024`
+        - ❌ Evite: `17-06-2025`, `06/17/2025` (formato americano)
+        
+        **✅ Verdadeiro/Falso (bool):**
+        - Valores aceitos: `True`, `False`, `1`, `0`, `sim`, `não`
+        - Case-insensitive: `true`, `TRUE`, `Sim`, `SIM`
+        """)
+    
     # Generate and download template
     st.write("**Passo 1: Baixe o modelo CSV**")
     template_csv = generate_template_csv(table_meta)
@@ -1121,6 +1215,8 @@ def batch_upload_form(table_meta: dict) -> None:
         file_name=f"modelo_{table_meta['name']}.csv",
         mime="text/csv"
     )
+    
+    st.info("💡 **Dica:** O modelo CSV contém duas linhas de exemplo mostrando formatos aceitos para cada tipo de campo. Use como referência!")
     
     st.write("**Passo 2: Preencha o arquivo CSV e faça o upload**")
     uploaded_file = st.file_uploader(
