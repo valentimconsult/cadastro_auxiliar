@@ -566,6 +566,23 @@ def sanitize_identifier(name: str) -> str:
     characters that are not alphanumeric or underscores.  The resulting
     identifier should always be safe to use directly in SQL statements.
     """
+    # Lista de palavras reservadas do PostgreSQL que podem causar conflitos
+    reserved_words = {
+        'check', 'order', 'group', 'select', 'from', 'where', 'having', 'limit', 'offset',
+        'insert', 'update', 'delete', 'create', 'alter', 'drop', 'table', 'index',
+        'constraint', 'primary', 'key', 'foreign', 'references', 'unique', 'not', 'null',
+        'default', 'auto_increment', 'serial', 'boolean', 'integer', 'text', 'varchar',
+        'char', 'date', 'time', 'timestamp', 'real', 'float', 'double', 'decimal',
+        'bigint', 'smallint', 'numeric', 'money', 'bytea', 'json', 'jsonb', 'array',
+        'enum', 'range', 'domain', 'type', 'view', 'function', 'procedure', 'trigger',
+        'sequence', 'schema', 'database', 'user', 'role', 'grant', 'revoke', 'privilege',
+        'cascade', 'restrict', 'on', 'in', 'exists', 'between', 'like', 'ilike', 'similar',
+        'to', 'as', 'is', 'and', 'or', 'case', 'when', 'then', 'else', 'end', 'if',
+        'for', 'while', 'loop', 'return', 'begin', 'commit', 'rollback', 'transaction',
+        'lock', 'unlock', 'vacuum', 'analyze', 'explain', 'with', 'recursive', 'union',
+        'intersect', 'except', 'all', 'distinct', 'asc', 'desc', 'nulls', 'first', 'last'
+    }
+    
     name = name.strip().lower().replace(" ", "_")
     allowed = []
     for c in name:
@@ -577,6 +594,11 @@ def sanitize_identifier(name: str) -> str:
     sanitized = "".join(allowed)
     if sanitized and sanitized[0].isdigit():
         sanitized = f"_{sanitized}"
+    
+    # Se o identificador for uma palavra reservada, adicionar sufixo
+    if sanitized in reserved_words:
+        sanitized = f"{sanitized}_col"
+    
     return sanitized
 
 
